@@ -1,12 +1,17 @@
 # freemodel-cc-proxy
 
-Local **Anthropic Messages API** backed by FreeModel's `cc.freemodel.dev` — gives any
-Anthropic-compatible client access to **real Claude Opus 4.8, Sonnet 4.6, Haiku 4.5**
-through one local endpoint, using your existing FreeModel key.
+Local **Claude proxy** over FreeModel's `cc.freemodel.dev` — gives any client access
+to **real Claude Opus 4.8, Sonnet 4.6, Haiku 4.5** through one local endpoint, using
+your existing FreeModel key. Speaks **both** protocols:
+
+- **Anthropic Messages API** (`POST /v1/messages`)
+- **OpenAI Chat Completions API** (`POST /v1/chat/completions`) — translated OpenAI⇄Anthropic
+
+…both **streaming and non-streaming**.
 
 Works with **Factory `droid`** (BYOK, with `FACTORY_AIRGAP_ENABLED=1`), **Claude Code**,
-**Cline**, **Cursor**, the **Anthropic SDK**, and any tool that talks the Anthropic
-Messages API.
+**Cline**, **Cursor**, the **Anthropic SDK**, the **OpenAI SDK**, and any tool that talks
+either API.
 
 > FreeModel exposes Claude only on `cc.freemodel.dev`, and that endpoint is gated to the
 > **official Claude Code client** — it returns `403 "This service is restricted to the
@@ -17,10 +22,19 @@ Messages API.
 
 ## What it does
 
-- `POST /v1/messages` — full Anthropic Messages API (streaming SSE + non-streaming),
+- `POST /v1/messages` — full Anthropic Messages API (**streaming SSE + non-streaming**),
   with the Claude Code fingerprint injected before forwarding to `cc.freemodel.dev`.
-- `GET /v1/models` — lists the Claude models FreeModel actually serves.
+- `POST /v1/chat/completions` — full OpenAI Chat Completions API (**streaming +
+  non-streaming**, including tool/function calling). Requests are translated
+  OpenAI→Anthropic, responses back Anthropic→OpenAI.
+- `GET /v1/models` — lists the Claude models FreeModel actually serves (OpenAI-shape).
 - `GET /` — web UI: status, model list, live test panel, request log.
+
+> The FreeModel gate forces `stream:true` on every upstream request. So even when a
+> client asks for a single JSON object (`stream:false`, the Anthropic SDK default, or
+> any non-streaming client), the proxy **buffers the SSE and reassembles one JSON
+> object** before returning it. Non-streaming clients work as if the upstream weren't
+> gated.
 
 ## Available models (from `cc.freemodel.dev/v1/models`)
 
@@ -124,6 +138,36 @@ print(c.messages.create(model="claude-opus-4-8", max_tokens=64,
       messages=[{"role":"user","content":"say ok"}]).content[0].text)
 ```
 
+## Use with the OpenAI SDK (Python)
+
+Point the OpenAI SDK at the proxy — same Claude models, OpenAI shape in and out:
+
+```python
+from openai import OpenAI
+c = OpenAI(base_url="http://127.0.0.1:11440/v1", api_key="dummy")
+r = c.chat.completions.create(
+    model="claude-opus-4-8",
+    messages=[{"role":"user","content":"say ok"}],
+)
+print(r.choices[0].message.content)
+
+# streaming + tool calling work the same way as with OpenAI's own API
+stream = c.chat.completions.create(
+    model="claude-opus-4-8",
+    stream=True,
+    tools=[{"type":"function","function":{
+        "name":"get_weather",
+        "parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],
+    messages=[{"role":"user","content":"weather in Paris"}],
+)
+for chunk in stream:
+    print(chunk.choices[0].delta)
+```
+
+Also works with **LiteLLM**, **LangChain** (`ChatOpenAI(base_url=...)`), **curl**, and any
+OpenAI-compatible client — set base URL `http://127.0.0.1:11440/v1`, any API key, model
+`claude-opus-4-8` / `claude-sonnet-4-6` / `claude-haiku-4-5-20251001`.
+
 ## How the fingerprint works
 
 `cc.freemodel.dev` validates the request **body shape**, not TLS/JA3 and not the key
@@ -140,9 +184,16 @@ gate requires:
   `x-app: cli`, `anthropic-beta: claude-code-20250219,…`,
   `anthropic-version: 2023-06-01`, `anthropic-dangerous-direct-browser-access: true`
 
-The proxy injects all of the above into every `/v1/messages` request, preserves the
-client's actual `system`/`messages`/`tools`, and streams the SSE response back
-unchanged. `/v1/models` is a passthrough.
+The proxy injects all of the above into every upstream request, preserves the client's
+actual `system`/`messages`/`tools`, and:
+
+- **Anthropic streaming clients** → SSE piped through unchanged.
+- **Anthropic non-streaming clients** → SSE buffered and reassembled into one
+  `Message` JSON object.
+- **OpenAI clients** (`/v1/chat/completions`) → the request is translated to Anthropic,
+  sent upstream, then the response is translated back: SSE→OpenAI chunks for streaming,
+  one `chat.completion` object for non-streaming. Tool calling is mapped both ways
+  (`tools`/`tool_choice`/`tool_calls`/`tool` results).
 
 ## systemd (Linux, manual)
 
@@ -179,8 +230,12 @@ powershell -File install\uninstall.ps1
   update the constants in `index.js`.
 - `cc.freemodel.dev` may rate-limit or tier-gate heavily; this proxy forwards
   upstream errors verbatim.
-- Only `/v1/messages` and `/v1/models` are proxied. Embeddings, files, batches are
-  not exposed by the upstream.
+- Proxied endpoints: `/v1/messages` (Anthropic), `/v1/chat/completions` (OpenAI),
+  `/v1/models`. Embeddings, files, batches are not exposed by the upstream.
+- OpenAI translation covers chat, system messages, tool/function calling, images
+  (base64 + URL), `temperature`/`top_p`/`stop`. Streaming-only OpenAI features like
+  `logprobs` are not mapped. Claude's `thinking` blocks are dropped on the OpenAI side
+  (OpenAI has no equivalent).
 
 ## License
 
