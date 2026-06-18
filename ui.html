@@ -5,215 +5,372 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>freemodel-cc-proxy</title>
 <style>
-  :root{--bg:#0f1115;--surface:#171a21;--surface2:#1f232c;--border:#2a2f3a;--ink:#e6e9ef;--muted:#8a93a3;--accent:#cc7722;--ok:#3fb950;--err:#f85149;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-  *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
-  a{color:var(--accent)}
-  header{padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-  header h1{font-size:18px;margin:0;font-weight:600;letter-spacing:.2px}
-  header .badge{font:600 11px var(--mono);padding:2px 8px;border-radius:4px;background:rgba(63,185,80,.12);color:var(--ok);border:1px solid rgba(63,185,80,.25)}
-  header .badge.err{background:rgba(248,81,73,.12);color:var(--err);border-color:rgba(248,81,73,.25)}
-  main{max-width:1100px;margin:0 auto;padding:24px;display:grid;gap:20px}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px}
-  .card h2{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-  @media(max-width:760px){.grid{grid-template-columns:1fr}}
-  .kv{display:grid;grid-template-columns:130px 1fr;gap:6px 14px;font-size:13px}
-  .kv dt{color:var(--muted);font-family:var(--mono);font-size:12px}
-  .kv dd{margin:0;font-family:var(--mono);word-break:break-all}
-  ul.models{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:8px}
-  ul.models li{font:12px var(--mono);padding:5px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px}
-  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
-  input,textarea,select{width:100%;font:13px var(--mono);background:var(--surface2);color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:8px 10px}
-  textarea{resize:vertical;min-height:70px}
-  button{font:600 13px system-ui;background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 16px;cursor:pointer;margin-top:12px}
-  button:hover{filter:brightness(1.1)}
-  button.ghost{background:var(--surface2);color:var(--ink);border:1px solid var(--border)}
-  .row{display:flex;gap:10px;align-items:center}
-  .row>*{flex:1}
-  #testOut{font:12px var(--mono);white-space:pre-wrap;background:#000;border:1px solid var(--border);border-radius:6px;padding:10px;min-height:60px;max-height:260px;overflow:auto;margin-top:12px}
-  #logs{font:11px var(--mono);background:#000;border:1px solid var(--border);border-radius:6px;padding:10px;height:240px;overflow:auto}
-  #logs .ln{display:grid;grid-template-columns:150px 50px 1fr 40px;gap:8px;padding:2px 0;border-bottom:1px solid #14171c}
-  #logs .st_2{color:var(--ok)}#logs .st_4,#logs .st_5{color:var(--err)}
-  .muted{color:var(--muted)}
-  .hint{font-size:12px;color:var(--muted);margin-top:8px}
-  #keys{font:12px var(--mono);background:#000;border:1px solid var(--border);border-radius:6px;padding:8px;max-height:280px;overflow:auto}
-  #keys table{border-collapse:collapse;width:100%}
-  #keys td,#keys th{text-align:left;padding:4px 6px;border-bottom:1px solid #14171c;white-space:nowrap}
-  #keys th{color:var(--muted);font-weight:600;position:sticky;top:0;background:#000}
-  .chip{font:600 10px var(--mono);padding:1px 6px;border-radius:4px;border:1px solid var(--border)}
-  .chip.cur{background:rgba(204,119,34,.15);color:var(--accent);border-color:rgba(204,119,34,.4)}
-  .chip.bad{background:rgba(248,81,73,.12);color:var(--err);border-color:rgba(248,81,73,.3)}
-  .chip.ok{background:rgba(63,185,80,.1);color:var(--ok);border-color:rgba(63,185,80,.3)}
-  .chip.lim{color:var(--muted)}
-  .del{font:600 11px system-ui;background:transparent;color:var(--err);border:1px solid rgba(248,81,73,.3);border-radius:4px;padding:2px 8px;cursor:pointer}
-  .del:hover{background:rgba(248,81,73,.12)}
-  details.docs{margin-top:6px}
-  details.docs summary{cursor:pointer;color:var(--accent);font:600 13px system-serif}
-  pre.code{background:#000;border:1px solid var(--border);border-radius:6px;padding:10px;font:12px var(--mono);color:#cfe;color:var(--ink);overflow:auto;margin:8px 0 4px}
-  pre.code .k{color:var(--accent)}pre.code .c{color:var(--muted)}
- </style>
+  /* ── design tokens (2026: oklch, semantic, fluid) ─────────────────────── */
+  :root{
+    /* surfaces — elevation by contrast, not borders */
+    --bg:        oklch(18% 0.012 260);
+    --surface:   oklch(22% 0.014 260);
+    --surface-2: oklch(26% 0.016 260);
+    --surface-3: oklch(30% 0.018 260);
+    --border:    oklch(32% 0.014 260 / 60%);
+    --border-2:  oklch(38% 0.016 260 / 45%);
+    /* ink */
+    --ink:       oklch(96% 0.004 260);
+    --ink-2:     oklch(82% 0.006 260);
+    --muted:     oklch(64% 0.010 260);
+    --muted-2:   oklch(52% 0.012 260);
+    /* accents — one confident accent + semantic */
+    --accent:    oklch(74% 0.16 55);       /* warm amber */
+    --accent-2:  oklch(78% 0.15 55 / 14%);
+    --ok:        oklch(78% 0.15 150);
+    --err:       oklch(70% 0.19 25);
+    --warn:      oklch(80% 0.15 80);
+    --info:      oklch(74% 0.13 240);
+    --radius:    12px;
+    --radius-sm: 8px;
+    --space:     8px;
+    --shadow:    0 1px 2px oklch(0% 0 0 / 35%), 0 8px 24px oklch(0% 0 0 / 22%);
+    --mono:      ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:      ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --tnum:      "tnum" 1, "lnum" 1;       /* tabular figures for metrics */
+  }
+  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
+
+  *{ box-sizing:border-box }
+  html,body{ margin:0 }
+  body{
+    font-family:var(--sans); background:var(--bg); color:var(--ink);
+    line-height:1.55; -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    background-image:radial-gradient(80% 50% at 50% -10%, oklch(74% 0.16 55 / 8%), transparent 70%);
+  }
+  a{ color:var(--accent); text-decoration:none }
+  a:hover{ text-decoration:underline }
+  code{ font-family:var(--mono); font-size:.86em; background:var(--surface-3); padding:1px 6px; border-radius:6px; color:var(--ink-2) }
+  .mono{ font-family:var(--mono); font-feature-settings:var(--tnum) }
+  .muted{ color:var(--muted) }
+  .hint{ font-size:12.5px; color:var(--muted); margin-top:8px }
+
+  /* ── sticky header ─────────────────────────────────────────────────── */
+  header.top{
+    position:sticky; top:0; z-index:20;
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:14px 24px;
+    background:color-mix(in oklch, var(--bg) 82%, transparent);
+    backdrop-filter:saturate(140%) blur(10px);
+    border-bottom:1px solid var(--border);
+  }
+  header.top .brand{ display:flex; align-items:center; gap:10px; font-weight:650; letter-spacing:-.01em; font-size:15px }
+  header.top .logo{ width:9px; height:9px; border-radius:3px; background:var(--accent); box-shadow:0 0 12px var(--accent) }
+  .pulse{ width:8px; height:8px; border-radius:50%; background:var(--ok); box-shadow:0 0 0 0 oklch(78% 0.15 150 / 50%); animation:pulse 2.4s ease-out infinite }
+  .pulse.err{ background:var(--err); animation:pulse-e 2s ease-out infinite }
+  @keyframes pulse{ 0%{ box-shadow:0 0 0 0 oklch(78% 0.15 150 / 55%) } 70%{ box-shadow:0 0 0 7px oklch(78% 0.15 150 / 0) } 100%{ box-shadow:0 0 0 0 oklch(78% 0.15 150 / 0) } }
+  @keyframes pulse-e{ 0%{ box-shadow:0 0 0 0 oklch(70% 0.19 25 / 55%) } 70%{ box-shadow:0 0 0 7px oklch(70% 0.19 25 / 0) } 100%{ box-shadow:0 0 0 0 oklch(70% 0.19 25 / 0) } }
+  .badge{ font:600 11px var(--mono); padding:3px 9px; border-radius:999px; color:var(--ok); background:oklch(78% 0.15 150 / 12%); border:1px solid oklch(78% 0.15 150 / 28%) }
+  .badge.err{ color:var(--err); background:oklch(70% 0.19 25 / 12%); border-color:oklch(70% 0.19 25 / 28%) }
+  header.top .ver{ color:var(--muted-2); font-family:var(--mono); font-size:12px; font-feature-settings:var(--tnum) }
+
+  main{ max-width:1120px; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:20px }
+
+  /* ── metrics strip (glanceable KPIs) ──────────────────────────────── */
+  .metrics{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px }
+  @media(max-width:860px){ .metrics{ grid-template-columns:repeat(2,1fr) } }
+  .metric{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; transition:border-color .15s, transform .15s }
+  .metric:hover{ border-color:var(--border-2); transform:translateY(-1px) }
+  .metric .k{ font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:600 }
+  .metric .v{ font-family:var(--mono); font-feature-settings:var(--tnum); font-size:21px; font-weight:600; margin-top:4px; letter-spacing:-.01em }
+  .metric .s{ font-size:11.5px; color:var(--muted-2); margin-top:2px; font-family:var(--mono); font-feature-settings:var(--tnum) }
+
+  /* ── cards / depth ───────────────────────────────────────────────── */
+  .card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow) }
+  .card h2{ margin:0 0 14px; font-size:12px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); font-weight:650 }
+  .grid{ display:grid; grid-template-columns:1fr 1fr; gap:20px }
+  @media(max-width:860px){ .grid{ grid-template-columns:1fr } }
+
+  /* status definition list */
+  .kv{ display:grid; grid-template-columns:124px 1fr; gap:8px 16px; font-size:13px }
+  .kv dt{ color:var(--muted); font-family:var(--mono); font-size:11.5px; align-self:center }
+  .kv dd{ margin:0; font-family:var(--mono); word-break:break-all; color:var(--ink-2) }
+
+  /* models */
+  ul.models{ margin:0; padding:0; list-style:none; display:flex; flex-wrap:wrap; gap:8px }
+  ul.models li{ font:12.5px var(--mono); padding:5px 11px; background:var(--surface-2); border:1px solid var(--border); border-radius:999px; color:var(--ink-2); transition:background .15s, border-color .15s }
+  ul.models li:hover{ background:var(--surface-3); border-color:var(--border-2) }
+
+  /* controls */
+  label{ display:block; font-size:11.5px; color:var(--muted); margin:12px 0 5px; font-weight:600 }
+  input,textarea,select{ width:100%; font:13px var(--mono); background:var(--surface-2); color:var(--ink); border:1px solid var(--border); border-radius:var(--radius-sm); padding:9px 11px; transition:border-color .15s, box-shadow .15s }
+  input:focus,textarea:focus,select:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-2) }
+  textarea{ resize:vertical; min-height:74px }
+  .row{ display:flex; gap:10px; align-items:center }
+  .row>*{ flex:1 }
+
+  /* segmented control (protocol toggle) */
+  .seg{ display:inline-flex; background:var(--surface-2); border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px }
+  .seg button{ border:0; background:transparent; color:var(--muted); font:600 12.5px var(--sans); padding:6px 14px; border-radius:999px; cursor:pointer; transition:color .15s, background .15s }
+  .seg button[aria-pressed="true"]{ color:var(--ink); background:var(--surface-3); box-shadow:var(--shadow) }
+
+  /* buttons */
+  button.btn{ font:600 13px var(--sans); background:var(--accent); color:oklch(20% 0.02 55); border:0; border-radius:var(--radius-sm); padding:9px 16px; cursor:pointer; transition:filter .15s, transform .08s; display:inline-flex; align-items:center; gap:7px }
+  button.btn:hover{ filter:brightness(1.06) }
+  button.btn:active{ transform:translateY(1px) }
+  button.btn.ghost{ background:var(--surface-2); color:var(--ink-2); border:1px solid var(--border-2) }
+  button.btn.ghost:hover{ background:var(--surface-3) }
+  button.btn.danger-ghost{ background:transparent; color:var(--err); border:1px solid oklch(70% 0.19 25 / 30%) }
+  button.btn.danger-ghost:hover{ background:oklch(70% 0.19 25 / 12%) }
+  :focus-visible{ outline:none; box-shadow:0 0 0 3px var(--accent-2); border-radius:6px }
+
+  /* test output */
+  #testOut{ font:12.5px var(--mono); white-space:pre-wrap; word-break:break-word; background:oklch(15% 0.01 260); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; min-height:60px; max-height:280px; overflow:auto; margin-top:14px }
+
+  /* logs */
+  #logs{ font:11.5px var(--mono); background:oklch(15% 0.01 260); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; height:250px; overflow:auto }
+  #logs .ln{ display:grid; grid-template-columns:148px 58px 1fr 38px; gap:8px; padding:3px 0; border-bottom:1px solid oklch(28% 0.01 260) }
+  #logs .ln:last-child{ border-bottom:0 }
+  #logs .st_2{ color:var(--ok) } #logs .st_4,#logs .st_5{ color:var(--err) }
+  #logs .t,#logs .st,#logs .n{ font-feature-settings:var(--tnum) }
+
+  /* ── key pool table ──────────────────────────────────────────────── */
+  #keys{ font:12px var(--mono); background:oklch(15% 0.01 260); border:1px solid var(--border); border-radius:var(--radius-sm); max-height:300px; overflow:auto }
+  #keys table{ border-collapse:collapse; width:100% }
+  #keys td,#keys th{ text-align:left; padding:7px 10px; white-space:nowrap }
+  #keys tbody tr{ border-top:1px solid oklch(28% 0.01 260) }
+  #keys tbody tr.cur{ background:oklch(74% 0.16 55 / 6%); box-shadow:inset 2px 0 0 var(--accent) }
+  #keys th{ color:var(--muted); font-weight:650; position:sticky; top:0; background:oklch(18% 0.012 260); font-size:11px; text-transform:uppercase; letter-spacing:.05em }
+  #keys .idx,#keys .n{ font-feature-settings:var(--tnum); color:var(--muted) }
+  #keys .cur-dot{ color:var(--accent) }
+  .chip{ display:inline-flex; align-items:center; gap:4px; font:600 10.5px var(--mono); padding:2px 7px; border-radius:999px; border:1px solid transparent; white-space:nowrap }
+  .chip::before{ content:""; width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.9 }
+  .chip.cur{ color:var(--accent); background:oklch(74% 0.16 55 / 12%); border-color:oklch(74% 0.16 55 / 35%) }
+  .chip.bad{ color:var(--err); background:oklch(70% 0.19 25 / 12%); border-color:oklch(70% 0.19 25 / 32%) }
+  .chip.ok{ color:var(--ok); background:oklch(78% 0.15 150 / 10%); border-color:oklch(78% 0.15 150 / 28%) }
+  .chip.lim{ color:var(--warn); background:oklch(80% 0.15 80 / 12%); border-color:oklch(80% 0.15 80 / 30%) }
+  .chip.idle{ color:var(--muted-2); background:var(--surface-3); border-color:var(--border-2) }
+  .del{ font:600 11px var(--sans); background:transparent; color:var(--err); border:1px solid oklch(70% 0.19 25 / 28%); border-radius:6px; padding:2px 9px; cursor:pointer; transition:background .12s }
+  .del:hover{ background:oklch(70% 0.19 25 / 12%) }
+
+  /* empty state */
+  .empty{ padding:18px; text-align:center; color:var(--muted); font-size:13px }
+
+  /* ── agent docs ──────────────────────────────────────────────────── */
+  details.card{ padding:0 }
+  details.card>summary{ list-style:none; cursor:pointer; padding:16px 18px; display:flex; align-items:center; gap:9px; font-weight:650; color:var(--ink); border-radius:var(--radius) }
+  details.card>summary::-webkit-details-marker{ display:none }
+  details.card>summary .chev{ transition:transform .2s; color:var(--muted) }
+  details.card[open]>summary .chev{ transform:rotate(90deg) }
+  .docs-body{ padding:0 18px 18px }
+  pre.code{ background:oklch(15% 0.01 260); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; font:12px var(--mono); color:var(--ink-2); overflow:auto; margin:8px 0 }
+  pre.code .k{ color:var(--accent) } pre.code .c{ color:var(--muted-2) }
+  .docs-body h3{ font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:16px 0 6px; font-weight:650 }
+  .legend{ display:flex; gap:12px; flex-wrap:wrap; margin-top:10px; font-size:12px; color:var(--muted) }
+  .legend .chip{ font-size:10px }
+</style>
 </head>
 <body>
-<header>
-  <h1>freemodel-cc-proxy</h1>
-  <span id="badge" class="badge">checking…</span>
-  <span class="muted" id="ver"></span>
+<header class="top">
+  <div class="brand"><span class="logo"></span> freemodel-cc-proxy</div>
+  <span class="pulse" id="pulse" title="health"></span>
+  <span class="badge" id="badge">checking…</span>
+  <span class="ver" id="ver"></span>
 </header>
+
 <main>
-  <section class="card">
-    <h2>Status</h2>
-    <dl class="kv" id="status"><dt>…</dt><dd></dd></dl>
-    <p class="hint">Use this endpoint as your base URL with any Anthropic- or OpenAI-compatible client.</p>
+  <!-- glanceable metrics -->
+  <section class="metrics">
+    <div class="metric"><div class="k">Status</div><div class="v" id="mStatus">—</div><div class="s" id="mUp">—</div></div>
+    <div class="metric"><div class="k">Keys</div><div class="v" id="mKeys">—</div><div class="s" id="mKeyActive">—</div></div>
+    <div class="metric"><div class="k">Active key</div><div class="v" id="mActive" style="font-size:15px">—</div><div class="s" id="mActiveReq">—</div></div>
+    <div class="metric"><div class="k">Requests</div><div class="v" id="mReq">—</div><div class="s">last status</div></div>
   </section>
 
   <section class="card">
-    <h2>Key pool — sequential drain (#1 → #2 → …), auto-rotate on 401/402/429/5xx</h2>
-    <div id="keys"><span class="muted">loading…</span></div>
-    <label for="addkey">Add key (fe_oa_…) — one or many, space/newline separated</label>
-    <textarea id="addkey" placeholder="fe_oa_..."></textarea>
-    <div class="row"><button id="addBtn">Add key(s)</button><button class="ghost" id="findBtn" style="margin-top:0">Find first working</button></div>
-    <span id="addMsg" class="hint" style="margin-left:10px"></span>
+    <h2>Endpoints</h2>
+    <dl class="kv" id="status"><dt>…</dt><dd></dd></dl>
+    <p class="hint">Point any Anthropic- or OpenAI-compatible client at this base URL. Auth header optional — the proxy injects the real key from the pool.</p>
+  </section>
+
+  <section class="card">
+    <h2>Key pool — sequential drain (#1 → #2 → …), auto-rotate on 401 / 402 / 429 / 5xx</h2>
+    <div id="keys"><div class="empty">loading…</div></div>
+    <div class="legend">
+      <span class="chip cur">active</span>
+      <span class="chip bad">bad (401)</span>
+      <span class="chip lim">limited</span>
+      <span class="chip ok">ok</span>
+      <span class="chip idle">idle</span>
+    </div>
+    <label for="addkey">Add keys (fe_oa_…) — one or many, space/newline separated</label>
+    <textarea id="addkey" placeholder="fe_oa_…&#10;fe_oa_…"></textarea>
+    <div class="row">
+      <button class="btn" id="addBtn">Add key(s)</button>
+      <button class="btn ghost" id="findBtn">Find first working</button>
+    </div>
+    <span id="addMsg" class="hint" style="margin-left:2px"></span>
   </section>
 
   <div class="grid">
     <section class="card">
-      <h2>Available models</h2>
-      <ul class="models" id="models"><li class="muted">loading…</li></ul>
-      <label for="model">Test model</label>
+      <h2>Test</h2>
+      <div class="seg" role="tablist" aria-label="protocol">
+        <button id="protoOpenai" aria-pressed="true">OpenAI</button>
+        <button id="protoAnthropic" aria-pressed="false">Anthropic</button>
+      </div>
+      <ul class="models" id="models" style="margin-top:14px"><li class="muted">loading…</li></ul>
+      <label for="model">Model</label>
       <select id="model"></select>
-      <label for="prompt">Test prompt</label>
+      <label for="prompt">Prompt</label>
       <textarea id="prompt">Reply with exactly: ok</textarea>
-      <div class="row"><button id="run">Send test</button><button class="ghost" id="refresh">Refresh</button></div>
+      <div class="row"><button class="btn" id="run">Send test</button><button class="btn ghost" id="refresh">Refresh</button></div>
       <div id="testOut"></div>
     </section>
 
     <section class="card">
       <h2>Recent requests</h2>
-      <div id="logs"><span class="muted">no requests yet</span></div>
-      <button class="ghost" id="refLogs" style="margin-top:12px">Refresh logs</button>
+      <div id="logs"><div class="empty">no requests yet</div></div>
+      <button class="btn ghost" id="refLogs" style="margin-top:12px">Refresh logs</button>
     </section>
   </div>
 
-  <details class="card docs">
-    <summary>Agent / automation docs (for AI agents & scripts)</summary>
-    <p class="hint">Base URL <code id="docBase">http://127.0.0.1:11440</code> · Auth header optional (any value; the proxy injects the real key from the pool).</p>
-
-    <h2 style="margin-top:14px">Manage the key pool</h2>
+  <details class="card">
+    <summary><span class="chev">▸</span> Agent / automation docs</summary>
+    <div class="docs-body">
+      <p class="hint">Base URL <code id="docBase">http://127.0.0.1:11440</code> · Auth optional (any value; the proxy injects the real key from the pool).</p>
+      <h3>Manage the key pool</h3>
 <pre class="code"><span class="c"># list keys (masked, with status + counts)</span>
 <span class="k">GET</span> /api/keys
-→ { "total": 2, "current": 0, "keys": [ { "index":0, "masked":"fe_oa_1e…a242", "current":true, "ok":3, "limited":0, "bad":false, "count":3, "lastStatus":200, "lastUsed":"…" } ] }
+→ { "total":2, "current":0, "keys":[{ "index":0, "masked":"fe_oa_1e…a242", "current":true, "ok":3, "limited":0, "bad":false, "count":3, "lastStatus":200, "lastUsed":"…" }] }
 
-<span class="c"># add one or many keys (the pool is persisted, dedup'd)</span>
-<span class="k">POST</span> /api/keys        {"keys":["fe_oa_…","fe_oa_…"]}
+<span class="c"># add one or many keys (persisted, dedup'd)</span>
+<span class="k">POST</span> /api/keys        { "keys":["fe_oa_…","fe_oa_…"] }
 → { "ok":true, "added":2, "total":4 }
 
 <span class="c"># remove by index (from GET) or by exact key</span>
-<span class="k">DELETE</span> /api/keys     {"index":0}     <span class="c"># or  {"key":"fe_oa_…"}</span>
+<span class="k">DELETE</span> /api/keys     { "index":0 }     <span class="c"># or  { "key":"fe_oa_…" }</span>
 
 <span class="c"># probe forward, lock onto the FIRST working key (minimal requests)</span>
 <span class="k">POST</span> /api/keys/find   {}
 → { "ok":true, "current":1, "masked":"fe_oa_9b…1d39", "probed":2, "tried":[…] }</pre>
-
-    <h2 style="margin-top:14px">Chat — real Claude</h2>
+      <h3>Chat — real Claude</h3>
 <pre class="code"><span class="c"># OpenAI Chat Completions (stream + non-stream, tools/function-calling)</span>
-<span class="k">POST</span> /v1/chat/completions   {"model":"claude-opus-4-8","messages":[…],"stream":false}
+<span class="k">POST</span> /v1/chat/completions   { "model":"claude-opus-4-8","messages":[…],"stream":false }
 
 <span class="c"># Anthropic Messages (stream + non-stream, tools/tool_use)</span>
-<span class="k">POST</span> /v1/messages            {"model":"claude-opus-4-8","max_tokens":1024,…}
+<span class="k">POST</span> /v1/messages            { "model":"claude-opus-4-8","max_tokens":1024,… }
 
-<span class="c"># models</span>
 <span class="k">GET</span>  /v1/models</pre>
-
-    <h2 style="margin-top:14px">curl — add a key from a script</h2>
+      <h3>curl — add a key from a script</h3>
 <pre class="code">curl -X POST http://127.0.0.1:11440/api/keys \
-  -H 'content-type: application/json' \
-  -d '{"keys":["fe_oa_…"]}'
+  -H 'content-type: application/json' -d '{"keys":["fe_oa_…"]}'
 <span class="c"># or use the bundled CLI:  node keys.js add fe_oa_…</span></pre>
-    <p class="hint">Models: <code>claude-opus-4-8</code>, <code>claude-sonnet-4-6</code>, <code>claude-opus-4-7</code>, <code>claude-opus-4-6</code>, <code>claude-haiku-4-5-20251001</code>, <code>claude-fable-5</code>.</p>
+      <p class="hint">Models: <code>claude-opus-4-8</code> · <code>claude-sonnet-4-6</code> · <code>claude-opus-4-7</code> · <code>claude-opus-4-6</code> · <code>claude-haiku-4-5-20251001</code> · <code>claude-fable-5</code></p>
+    </div>
   </details>
 </main>
 
 <script>
-const $=(s)=>document.querySelector(s);
-async function json(u,o){const r=await fetch(u,o);return [r.status,await r.json().catch(()=>({}))];}
+const $ = (s) => document.querySelector(s);
+let proto = "openai";
+async function json(u, o){ const r = await fetch(u, o); return [r.status, await r.json().catch(() => ({}))]; }
+const tnum = (n) => (n == null ? "—" : Number(n).toLocaleString());
+
 async function status(){
-  const[s,d]=await json('/api/status');
-  const b=$('#badge');
-  if(s===200){b.textContent='running';b.classList.remove('err');}
-  else{b.textContent='down';b.classList.add('err');return;}
-  $('#ver').textContent='v'+(d.version||'')+' · up '+d.uptime_s+'s';
-  const db=$('#docBase'); if(db) db.textContent=location.origin;
-  const kv=$('#status');kv.innerHTML='';
-  const rows=[['base URL',location.origin],['Anthropic',location.origin+'/v1/messages'],['OpenAI',location.origin+'/v1/chat/completions'],['upstream','https://'+d.upstream+'/v1/messages?beta=true'],['keys',d.keys.total+' (active #'+d.keys.current+': '+d.keys.currentMasked+')'],['device_id',d.device_id],['session_id',d.session_id]];
-  rows.forEach(([k,v])=>{const dt=document.createElement('dt');dt.textContent=k;const dd=document.createElement('dd');dd.textContent=v;kv.append(dt,dd);});
+  const [s, d] = await json('/api/status');
+  const badge = $('#badge'), pulse = $('#pulse');
+  $('#mStatus').textContent = (s === 200 && d.ok) ? 'live' : 'down';
+  $('#mUp').textContent = (s === 200) ? ('up ' + d.uptime_s + 's') : '—';
+  if (s === 200 && d.ok){ badge.textContent = 'running'; badge.classList.remove('err'); pulse.classList.remove('err'); }
+  else { badge.textContent = 'down'; badge.classList.add('err'); pulse.classList.add('err'); return; }
+  $('#ver').textContent = 'v' + (d.version || '');
+  const db = $('#docBase'); if (db) db.textContent = location.origin;
+  const kv = $('#status'); kv.innerHTML = '';
+  const rows = [
+    ['base URL', location.origin],
+    ['Anthropic', location.origin + '/v1/messages'],
+    ['OpenAI', location.origin + '/v1/chat/completions'],
+    ['upstream', 'https://' + d.upstream + '/v1/messages?beta=true'],
+  ];
+  rows.forEach(([k, v]) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; kv.append(dt, dd); });
+  $('#mKeys').textContent = d.keys.total;
+  $('#mKeyActive').textContent = '#' + d.keys.current;
+  $('#mActive').textContent = d.keys.currentMasked;
 }
 async function models(){
-  const[s,d]=await json('/v1/models');
-  const ul=$('#models');ul.innerHTML='';
-  const sel=$('#model');sel.innerHTML='';
-  (d.data||[]).forEach(m=>{const li=document.createElement('li');li.textContent=m.id;ul.append(li);
-    const o=document.createElement('option');o.value=m.id;o.textContent=m.id;sel.append(o);});
+  const [s, d] = await json('/v1/models');
+  const ul = $('#models'); ul.innerHTML = '';
+  const sel = $('#model'); sel.innerHTML = '';
+  (d.data || []).forEach((m) => { const li = document.createElement('li'); li.textContent = m.id; ul.append(li);
+    const o = document.createElement('option'); o.value = m.id; o.textContent = m.id; sel.append(o); });
 }
 async function test(){
-  const out=$('#testOut');out.textContent='…';
-  const[s,d]=await json('/api/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:$('#model').value,prompt:$('#prompt').value})});
-  if(d.ok){out.textContent='HTTP '+s+' · '+d.model+'\n\n'+d.raw;}
-  else{out.textContent='HTTP '+(d.status||s)+'\n\n'+(d.raw||d.error||JSON.stringify(d));}
+  const out = $('#testOut'); out.textContent = '…';
+  const [s, d] = await json('/api/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: $('#model').value, prompt: $('#prompt').value, proto }) });
+  if (d.ok) { out.textContent = 'HTTP ' + s + ' · ' + d.model + '\n\n' + d.raw; }
+  else { out.textContent = 'HTTP ' + (d.status || s) + '\n\n' + (d.raw || d.error || JSON.stringify(d)); }
   refreshLogs();
 }
-async function refreshLogs(){
-  const[s,d]=await json('/api/logs');if(s!==200)return;
-  const el=$('#logs');el.innerHTML='';
-  (d.logs||[]).slice(0,80).forEach(l=>{
-    const ln=document.createElement('div');ln.className='ln';
-    const st=(l.status||'').toString();
-    ln.innerHTML='<span>'+l.ts+'</span><span>'+l.kind+'</span><span>'+l.method+' '+l.path+(l.note?' · '+l.note:'')+'</span><span class="st_'+st[0]+'">'+st+'</span>';
-    el.append(ln);
-  });
-  if(!el.children.length){const sp=document.createElement('span');sp.className='muted';sp.textContent='no requests yet';el.append(sp);}
-}
 async function refreshKeys(){
-  const[s,d]=await json('/api/keys');if(s!==200)return;
-  const el=$('#keys');
-  if(!d.keys||!d.keys.length){el.innerHTML='<span class="muted">(no keys — add below)</span>';return;}
-  let h='<table><thead><tr><th></th><th>#</th><th>key</th><th>status</th><th>last</th><th>reqs</th><th></th></tr></thead><tbody>';
-  for(const k of d.keys){
-    const chips=[];
-    if(k.current)chips.push('<span class="chip cur">active</span>');
-    if(k.bad)chips.push('<span class="chip bad">BAD</span>');
-    if(k.limited)chips.push('<span class="chip lim">lim×'+k.limited+'</span>');
-    if(k.ok)chips.push('<span class="chip ok">ok×'+k.ok+'</span>');
-    h+='<tr><td>'+(k.current?'★':'·')+'</td><td>'+k.index+'</td><td>'+k.masked+'</td><td>'+chips.join(' ')+'</td><td>'+(k.lastStatus||'')+'</td><td>'+k.count+'</td><td><button class="del" data-i="'+k.index+'">rm</button></td></tr>';
+  const [s, d] = await json('/api/keys'); if (s !== 200) return;
+  const el = $('#keys');
+  $('#mActiveReq').textContent = ('reqs: ' + (d.keys.find(k => k.current) ? d.keys.find(k => k.current).count : 0));
+  if (!d.keys || !d.keys.length){ el.innerHTML = '<div class="empty">no keys — add below</div>'; return; }
+  let h = '<table><thead><tr><th></th><th>#</th><th>key</th><th>status</th><th>last</th><th>reqs</th><th></th></tr></thead><tbody>';
+  for (const k of d.keys){
+    const chips = [];
+    if (k.current) chips.push('<span class="chip cur">active</span>');
+    if (k.bad) chips.push('<span class="chip bad">bad</span>');
+    if (k.limited) chips.push('<span class="chip lim">lim×' + k.limited + '</span>');
+    if (k.ok) chips.push('<span class="chip ok">ok×' + k.ok + '</span>');
+    if (!chips.length) chips.push('<span class="chip idle">idle</span>');
+    h += '<tr class="' + (k.current ? 'cur' : '') + '"><td class="cur-dot">' + (k.current ? '★' : '·') + '</td><td class="idx">' + k.index + '</td><td>' + k.masked + '</td><td>' + chips.join(' ') + '</td><td class="st">' + (k.lastStatus || '') + '</td><td class="n">' + tnum(k.count) + '</td><td><button class="del" data-i="' + k.index + '">rm</button></td></tr>';
   }
-  h+='</tbody></table>';
-  el.innerHTML=h;
-  el.querySelectorAll('.del').forEach(b=>b.onclick=async()=>{await json('/api/keys',{method:'DELETE',headers:{'content-type':'application/json'},body:JSON.stringify({index:parseInt(b.dataset.i,10)})});refreshKeys();});
+  h += '</tbody></table>';
+  el.innerHTML = h;
+  el.querySelectorAll('.del').forEach((b) => b.onclick = async () => { await json('/api/keys', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ index: parseInt(b.dataset.i, 10) }) }); refreshKeys(); });
 }
 async function addKeys(){
-  const ta=$('#addkey');const raw=ta.value.trim();if(!raw)return;
-  const keys=raw.split(/[\s,]+/).filter(x=>x);
-  const[s,d]=await json('/api/keys',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({keys})});
-  const m=$('#addMsg');m.textContent=s===200?('added '+d.added+', total '+d.total):('failed: '+JSON.stringify(d));
-  if(s===200)ta.value='';
-  setTimeout(()=>{m.textContent='';},3000);
+  const ta = $('#addkey'); const raw = ta.value.trim(); if (!raw) return;
+  const keys = raw.split(/[\s,]+/).filter((x) => x);
+  const [s, d] = await json('/api/keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ keys }) });
+  const m = $('#addMsg'); m.textContent = (s === 200) ? ('added ' + d.added + ', total ' + d.total) : ('failed: ' + JSON.stringify(d));
+  if (s === 200) ta.value = '';
+  setTimeout(() => { m.textContent = ''; }, 3000);
   refreshKeys();
 }
 async function findWorking(){
-  const m=$('#addMsg');m.textContent='probing…';
-  const[s,d]=await json('/api/keys/find',{method:'POST'});
-  if(d.ok){m.textContent='locked #'+d.current+' '+d.masked+' ('+d.probed+' probe)';}
-  else{m.textContent='no working key ('+(d.probed||0)+' probed)';}
-  setTimeout(()=>{m.textContent='';},4000);
+  const m = $('#addMsg'); m.textContent = 'probing…';
+  const [s, d] = await json('/api/keys/find', { method: 'POST' });
+  if (d.ok) { m.textContent = 'locked #' + d.current + ' ' + d.masked + ' (' + d.probed + ' probe)'; }
+  else { m.textContent = 'no working key (' + (d.probed || 0) + ' probed)'; }
+  setTimeout(() => { m.textContent = ''; }, 4000);
   refreshKeys();
 }
-$('#run').onclick=test;
-$('#refresh').onclick=()=>{status();models();refreshLogs();refreshKeys();};
-$('#refLogs').onclick=refreshLogs;
-$('#addBtn').onclick=addKeys;
-$('#findBtn').onclick=findWorking;
-status();models();refreshLogs();refreshKeys();
-setInterval(()=>{refreshLogs();refreshKeys();},4000);
+async function refreshLogs(){
+  const [s, d] = await json('/api/logs'); if (s !== 200) return;
+  const el = $('#logs'); el.innerHTML = '';
+  const logs = d.logs || [];
+  const last = logs[0];
+  $('#mReq').textContent = tnum(logs.length);
+  logs.slice(0, 80).forEach((l) => {
+    const ln = document.createElement('div'); ln.className = 'ln';
+    const st = (l.status || '').toString();
+    ln.innerHTML = '<span class="t">' + l.ts + '</span><span>' + l.kind + '</span><span>' + l.method + ' ' + l.path + (l.note ? ' · ' + l.note : '') + '</span><span class="st st_' + st[0] + '">' + st + '</span>';
+    el.append(ln);
+  });
+  if (!el.children.length){ const sp = document.createElement('div'); sp.className = 'empty'; sp.textContent = 'no requests yet'; el.append(sp); }
+}
+function setProto(p){
+  proto = p;
+  $('#protoOpenai').setAttribute('aria-pressed', p === 'openai');
+  $('#protoAnthropic').setAttribute('aria-pressed', p === 'anthropic');
+}
+$('#protoOpenai').onclick = () => setProto('openai');
+$('#protoAnthropic').onclick = () => setProto('anthropic');
+$('#run').onclick = test;
+$('#refresh').onclick = () => { status(); models(); refreshLogs(); refreshKeys(); };
+$('#refLogs').onclick = refreshLogs;
+$('#addBtn').onclick = addKeys;
+$('#findBtn').onclick = findWorking;
+status(); models(); refreshLogs(); refreshKeys();
+setInterval(() => { refreshLogs(); refreshKeys(); }, 4000);
 </script>
 </body>
 </html>
