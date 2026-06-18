@@ -28,7 +28,7 @@ either API.
   non-streaming**, including tool/function calling). Requests are translated
   OpenAI→Anthropic, responses back Anthropic→OpenAI.
 - `GET /v1/models` — lists the Claude models FreeModel actually serves (OpenAI-shape).
-- `GET /` — web UI: status, model list, live test panel, request log.
+- `GET /` — web UI: status, model list, **key pool**, live test panel, request log.
 
 > The FreeModel gate forces `stream:true` on every upstream request. So even when a
 > client asks for a single JSON object (`stream:false`, the Anthropic SDK default, or
@@ -98,6 +98,40 @@ Precedence: env vars > `~/.freemodel-cc-proxy/config.json` > defaults.
 |---|---|
 | env | `FMCC_KEY`, `FMCC_PORT` (default `11440`), `FMCC_UPSTREAM` (default `cc.freemodel.dev`), `FMCC_LOG_FILE` |
 | config.json | `{ "port": 11440, "upstream": "cc.freemodel.dev", "key": "fe_oa_..." }` |
+| keys.json | `{ "keys": ["fe_oa_...", "fe_oa_..."] }` — the key pool (managed via CLI/UI) |
+
+## Key pool — multi-key rotation (drain #1 → #2 → …)
+
+The proxy holds a **pool of FreeModel keys** and drains them in order. It serves from
+the current key; when that key hits `401`/`402`/`429`/`5xx`, it **advances to the next
+key and retries the same request** — at most once per key — so the client sees no
+break. `401` marks a key `bad` (skipped until restart); `402`/`429`/`5xx` mark it
+`limited` and move the pointer forward (sequential drain). When every key is dead you
+finally get an error. A single legacy key (`FMCC_KEY` / config.json `key`) is used to
+bootstrap the pool the first time.
+
+Manage keys live (updates the running proxy + persists `~/.freemodel-cc-proxy/keys.json`):
+
+```bash
+node keys.js                       # list keys (masked, status, reqs)
+node keys.js add fe_oa_...         # add one
+node keys.js add fe_oa_... fe_oa_...   # add several
+node keys.js rm 3                  # remove by index
+node keys.js rm fe_oa_...          # remove by exact key
+node keys.js status                # pool summary
+```
+
+Or from the web UI (`/` → "Key pool" card), or programmatically via the HTTP API:
+
+```bash
+curl localhost:11440/api/keys                                  # GET  — list
+curl -X POST localhost:11440/api/keys -H 'content-type: application/json' \
+  -d '{"keys":["fe_oa_...","fe_oa_..."]}'                      # POST — add
+curl -X DELETE localhost:11440/api/keys -H 'content-type: application/json' \
+  -d '{"index":0}'                                             # DELETE — by index or {key}
+```
+
+`keys.json` is gitignored. AI agents can add keys by `POST`ing to `/api/keys`.
 
 ## Use with Factory `droid`
 

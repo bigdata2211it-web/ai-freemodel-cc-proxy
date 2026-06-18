@@ -40,9 +40,46 @@ function loadConfig() {
   return cfg;
 }
 const CFG = loadConfig();
-if (!CFG.key) {
-  console.error("FMCC_KEY not set. Put your FreeModel key (fe_oa_...) in FMCC_KEY env");
-  console.error("or in " + CONFIG_FILE + ' as {"key":"fe_oa_..."}.');
+
+// ─── key pool (multi-key rotation: drain key #1 until exhausted, then #2, …) ─
+// On 401/402/429/5xx the proxy advances to the next usable key and retries the
+// SAME client request, so the client sees no break — only a final error if every
+// key in the pool is dead. The pointer only moves forward (sequential drain).
+const KEYS_FILE = path.join(CONFIG_DIR, "keys.json");
+function loadKeyPool() {
+  let arr = [];
+  try { const j = JSON.parse(fs.readFileSync(KEYS_FILE, "utf8")); if (Array.isArray(j.keys)) arr = j.keys.filter((k) => typeof k === "string" && k); } catch {}
+  // bootstrap from legacy single key (env FMCC_KEY or config.json "key")
+  if (!arr.length && CFG.key) arr = [CFG.key];
+  return arr;
+}
+let KEY_POOL = loadKeyPool();
+let keyIdx = 0;
+const keyStats = {};
+const ROTATE_STATUSES = new Set([401, 402, 429, 500, 502, 503, 504]);
+function ensureStats(k) { if (!keyStats[k]) keyStats[k] = { ok: 0, limited: 0, bad: false, count: 0, lastStatus: null, lastUsed: null }; return keyStats[k]; }
+KEY_POOL.forEach(ensureStats);
+function persistKeys() {
+  try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(KEYS_FILE, JSON.stringify({ keys: KEY_POOL }, null, 2) + "\n"); } catch {}
+}
+function maskKey(k) { return k ? k.slice(0, 8) + "…" + k.slice(-4) : "(none)"; }
+function currentKey() { return KEY_POOL[keyIdx]; }
+// advance the persistent pointer to the next non-bad key (forward, circular)
+function advancePointer() {
+  if (KEY_POOL.length === 0) return;
+  for (let i = 0; i < KEY_POOL.length; i++) {
+    keyIdx = (keyIdx + 1) % KEY_POOL.length;
+    const s = keyStats[KEY_POOL[keyIdx]];
+    if (!s || !s.bad) return;
+  }
+}
+function reloadKeyStats() { KEY_POOL.forEach(ensureStats); }
+
+if (!KEY_POOL.length) {
+  console.error("No FreeModel keys configured. Add one (or many):");
+  console.error("  node keys.js add fe_oa_...");
+  console.error("  or: FMCC_KEY=fe_oa_... node index.js");
+  console.error("  or put {\"keys\":[\"fe_oa_...\"]} in " + KEYS_FILE);
   process.exit(1);
 }
 
@@ -318,7 +355,7 @@ function pushLog(entry) {
 }
 
 // ─── upstream request helpers ────────────────────────────────────────────
-function buildUpstreamHeaders(bodyBuf, extra) {
+function buildUpstreamHeaders(bodyBuf, key, extra) {
   const headers = {
     "host": CFG.upstream,
     "user-agent": UA,
@@ -330,7 +367,8 @@ function buildUpstreamHeaders(bodyBuf, extra) {
     "content-type": "application/json",
   };
   if (bodyBuf && bodyBuf.length) headers["content-length"] = Buffer.byteLength(bodyBuf);
-  if (CFG.key) { headers["x-api-key"] = CFG.key; headers["authorization"] = "Bearer " + CFG.key; }
+  const k = key || CFG.key;
+  if (k) { headers["x-api-key"] = k; headers["authorization"] = "Bearer " + k; }
   return Object.assign(headers, extra || {});
 }
 
@@ -473,7 +511,7 @@ function respondOpenAINonStream(upres, cres, model, logEntry) {
 
 // Generic GET passthrough (used by /v1/models).
 function passthroughGet(reqUrl, clientHeaders, cres) {
-  const headers = buildUpstreamHeaders(null, { accept: "application/json" });
+  const headers = buildUpstreamHeaders(null, currentKey(), { accept: "application/json" });
   const logEntry = { kind: "api", method: "GET", path: reqUrl, status: null };
   const up = https.request({ host: CFG.upstream, port: 443, method: "GET", path: reqUrl, headers }, (upres) => {
     logEntry.status = upres.statusCode;
@@ -485,18 +523,47 @@ function passthroughGet(reqUrl, clientHeaders, cres) {
   up.end();
 }
 
-// POST to upstream /v1/messages?beta=true and dispatch the response by mode.
-function postMessages(bodyBuf, cres, mode, model, logEntry) {
-  const headers = buildUpstreamHeaders(bodyBuf);
-  const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers }, (upres) => {
+// POST to upstream /v1/messages?beta=true with key rotation. On a rotatable
+// status (401/402/429/5xx) it advances to the next key and retries the SAME
+// request — at most once per key in the pool — so the client sees no break.
+function postWithRetry(bodyBuf, cres, mode, model, logEntry) {
+  const maxAttempts = Math.max(1, KEY_POOL.length);
+  let attempts = 0;
+  function dispatch(upres) {
     if (mode === "anthropic-stream") respondAnthropicStream(upres, cres, logEntry);
     else if (mode === "anthropic-nonstream") respondAnthropicNonStream(upres, cres, logEntry);
     else if (mode === "openai-stream") respondOpenAIStream(upres, cres, model, logEntry);
     else respondOpenAINonStream(upres, cres, model, logEntry); // openai-nonstream
-  });
-  up.on("error", (e) => proxyError(cres, logEntry, e));
-  up.write(bodyBuf);
-  up.end();
+  }
+  function attempt() {
+    if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool")); return; }
+    const key = currentKey();
+    attempts++;
+    const headers = buildUpstreamHeaders(bodyBuf, key);
+    const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers }, (upres) => {
+      const st = upres.statusCode || 0;
+      const s = ensureStats(key);
+      s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
+      if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
+        upres.resume(); // drain & discard the error body, free the socket
+        if (st === 401) s.bad = true; else s.limited++;
+        const note = maskKey(key) + "->" + st;
+        advancePointer();
+        logEntry.note = logEntry.note ? logEntry.note + " " + note + "->retry" : note + "->retry";
+        attempt();
+        return;
+      }
+      if (st >= 200 && st < 300) s.ok++;
+      dispatch(upres);
+    });
+    up.on("error", (e) => {
+      if (attempts < maxAttempts) { advancePointer(); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "neterr->retry"; attempt(); }
+      else proxyError(cres, logEntry, e);
+    });
+    up.write(bodyBuf);
+    up.end();
+  }
+  attempt();
 }
 
 // ─── UI helpers ───────────────────────────────────────────────────────────
@@ -505,7 +572,15 @@ function sendJson(cres, code, obj) {
   cres.writeHead(code, { "content-type": "application/json", "content-length": buf.length });
   cres.end(buf);
 }
-function maskKey(k) { return k ? k.slice(0, 8) + "…" + k.slice(-4) : "(none)"; }
+function readJsonBody(creq, cb) {
+  const ch = [];
+  creq.on("data", (c) => ch.push(c));
+  creq.on("end", () => {
+    let b;
+    try { b = JSON.parse(Buffer.concat(ch).toString("utf8") || "{}"); } catch { b = {}; }
+    cb(b);
+  });
+}
 
 // ─── server ───────────────────────────────────────────────────────────────
 const server = http.createServer((creq, cres) => {
@@ -528,7 +603,7 @@ const server = http.createServer((creq, cres) => {
       ok: true,
       port: CFG.port,
       upstream: CFG.upstream,
-      key: maskKey(CFG.key),
+      keys: { total: KEY_POOL.length, current: keyIdx, currentMasked: maskKey(currentKey()) },
       device_id: DEVICE_ID,
       session_id: SESSION_ID,
       version: require("./package.json").version,
@@ -538,6 +613,64 @@ const server = http.createServer((creq, cres) => {
     return;
   }
   if (url === "/api/logs") { sendJson(cres, 200, { logs: LOGS.slice().reverse() }); return; }
+
+  // Key pool management (UI + CLI keys.js + AI agents)
+  if (url === "/api/keys") {
+    if (creq.method === "GET") {
+      reloadKeyStats();
+      sendJson(cres, 200, {
+        total: KEY_POOL.length,
+        current: keyIdx,
+        keys: KEY_POOL.map((k, i) => {
+          const s = keyStats[k] || {};
+          return {
+            index: i,
+            masked: maskKey(k),
+            current: i === keyIdx,
+            ok: s.ok || 0,
+            limited: s.limited || 0,
+            bad: !!s.bad,
+            count: s.count || 0,
+            lastStatus: s.lastStatus,
+            lastUsed: s.lastUsed,
+          };
+        }),
+      });
+      return;
+    }
+    if (creq.method === "POST") {
+      readJsonBody(creq, (body) => {
+        const added = [];
+        const add = (v) => {
+          if (typeof v === "string" && v.trim() && !KEY_POOL.includes(v.trim())) { KEY_POOL.push(v.trim()); ensureStats(v.trim()); added.push(v.trim()); }
+        };
+        if (Array.isArray(body.keys)) body.keys.forEach(add);
+        else if (body.key) add(body.key);
+        persistKeys();
+        sendJson(cres, 200, { ok: true, added: added.length, total: KEY_POOL.length });
+      });
+      return;
+    }
+    if (creq.method === "DELETE") {
+      readJsonBody(creq, (body) => {
+        let removed = false;
+        if (typeof body.index === "number" && KEY_POOL[body.index] !== undefined) {
+          KEY_POOL.splice(body.index, 1); removed = true;
+        } else if (typeof body.key === "string") {
+          const i = KEY_POOL.indexOf(body.key.trim());
+          if (i >= 0) { KEY_POOL.splice(i, 1); removed = true; }
+        }
+        if (removed) {
+          keyIdx = KEY_POOL.length ? keyIdx % KEY_POOL.length : 0;
+          persistKeys();
+          sendJson(cres, 200, { ok: true, removed: true, total: KEY_POOL.length });
+        } else {
+          sendJson(cres, 404, { ok: false, error: "key not found" });
+        }
+      });
+      return;
+    }
+  }
 
   if (url === "/api/test" && creq.method === "POST") {
     let chunks = [];
@@ -556,7 +689,7 @@ const server = http.createServer((creq, cres) => {
       const injected = injectFingerprint(body);
       const buf = Buffer.from(injected.body);
       const logEntry = { kind: "test", method: "POST", path: "/v1/messages", status: null, note: model };
-      const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers: buildUpstreamHeaders(buf) }, (upres) => {
+      const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers: buildUpstreamHeaders(buf, currentKey()) }, (upres) => {
         const data = [];
         upres.on("data", (c) => data.push(c));
         upres.on("end", () => {
@@ -593,7 +726,7 @@ const server = http.createServer((creq, cres) => {
       const buf = Buffer.from(inj.body);
       const mode = inj.clientStream ? "anthropic-stream" : "anthropic-nonstream";
       const logEntry = { kind: "anthropic", method: "POST", path: "/v1/messages", status: null, note: inj.clientStream ? "stream" : "nonstream" };
-      postMessages(buf, cres, mode, inj.model, logEntry);
+      postWithRetry(buf, cres, mode, inj.model, logEntry);
     });
     return;
   }
@@ -614,7 +747,7 @@ const server = http.createServer((creq, cres) => {
       const buf = Buffer.from(inj.body);
       const mode = oai.stream === true ? "openai-stream" : "openai-nonstream";
       const logEntry = { kind: "openai", method: "POST", path: "/v1/chat/completions", status: null, note: oai.stream === true ? "stream" : "nonstream" };
-      postMessages(buf, cres, mode, oai.model || "claude", logEntry);
+      postWithRetry(buf, cres, mode, oai.model || "claude", logEntry);
     });
     return;
   }
@@ -634,5 +767,6 @@ server.listen(CFG.port, "127.0.0.1", () => {
   console.log("  OpenAI    : http://127.0.0.1:" + CFG.port + "/v1/chat/completions  (stream + non-stream)");
   console.log("  Models    : http://127.0.0.1:" + CFG.port + "/v1/models");
   console.log("  UI        : http://127.0.0.1:" + CFG.port + "/");
-  console.log("  upstream  : https://" + CFG.upstream + "  key: " + maskKey(CFG.key));
+  console.log("  upstream  : https://" + CFG.upstream);
+  console.log("  keys      : " + KEY_POOL.length + " (active: " + maskKey(currentKey()) + ", rotate on 401/402/429/5xx)");
 });

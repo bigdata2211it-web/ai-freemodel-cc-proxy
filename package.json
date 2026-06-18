@@ -1,15 +1,16 @@
 {
   "name": "freemodel-cc-proxy",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Local Claude proxy over FreeModel's cc.freemodel.dev — Anthropic Messages API (/v1/messages) AND OpenAI Chat Completions API (/v1/chat/completions), streaming + non-streaming, for any client (Factory Droid, Claude Code, Cline, Cursor, Anthropic SDK, OpenAI SDK) by impersonating the official Claude Code request fingerprint.",
   "main": "index.js",
-  "bin": { "freemodel-cc-proxy": "index.js" },
+  "bin": { "freemodel-cc-proxy": "index.js", "freemodel-cc-keys": "keys.js" },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "keys": "node keys.js"
   },
   "engines": { "node": ">=18" },
-  "files": ["index.js", "ui.html", "package.json", "README.md", "LICENSE", "start.sh", "start.cmd", "start.ps1", "install", "systemd"],
-  "keywords": ["freemodel", "claude", "anthropic", "proxy", "byok", "droid", "claude-code", "opus", "sonnet"],
+  "files": ["index.js", "keys.js", "ui.html", "package.json", "README.md", "LICENSE", "start.sh", "start.cmd", "start.ps1", "install", "systemd"],
+  "keywords": ["freemodel", "claude", "anthropic", "proxy", "byok", "droid", "claude-code", "opus", "sonnet", "openai", "key-pool", "rotation"],
   "license": "MIT",
   "author": "bigdata2211it-web"
 }

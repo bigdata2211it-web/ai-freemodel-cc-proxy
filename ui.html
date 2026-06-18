@@ -37,7 +37,18 @@
   #logs .st_2{color:var(--ok)}#logs .st_4,#logs .st_5{color:var(--err)}
   .muted{color:var(--muted)}
   .hint{font-size:12px;color:var(--muted);margin-top:8px}
-</style>
+  #keys{font:12px var(--mono);background:#000;border:1px solid var(--border);border-radius:6px;padding:8px;max-height:280px;overflow:auto}
+  #keys table{border-collapse:collapse;width:100%}
+  #keys td,#keys th{text-align:left;padding:4px 6px;border-bottom:1px solid #14171c;white-space:nowrap}
+  #keys th{color:var(--muted);font-weight:600;position:sticky;top:0;background:#000}
+  .chip{font:600 10px var(--mono);padding:1px 6px;border-radius:4px;border:1px solid var(--border)}
+  .chip.cur{background:rgba(204,119,34,.15);color:var(--accent);border-color:rgba(204,119,34,.4)}
+  .chip.bad{background:rgba(248,81,73,.12);color:var(--err);border-color:rgba(248,81,73,.3)}
+  .chip.ok{background:rgba(63,185,80,.1);color:var(--ok);border-color:rgba(63,185,80,.3)}
+  .chip.lim{color:var(--muted)}
+  .del{font:600 11px system-ui;background:transparent;color:var(--err);border:1px solid rgba(248,81,73,.3);border-radius:4px;padding:2px 8px;cursor:pointer}
+  .del:hover{background:rgba(248,81,73,.12)}
+ </style>
 </head>
 <body>
 <header>
@@ -49,7 +60,16 @@
   <section class="card">
     <h2>Status</h2>
     <dl class="kv" id="status"><dt>…</dt><dd></dd></dl>
-    <p class="hint">Use this endpoint as your base URL with any Anthropic-compatible client.</p>
+    <p class="hint">Use this endpoint as your base URL with any Anthropic- or OpenAI-compatible client.</p>
+  </section>
+
+  <section class="card">
+    <h2>Key pool — sequential drain (#1 → #2 → …), auto-rotate on 401/402/429/5xx</h2>
+    <div id="keys"><span class="muted">loading…</span></div>
+    <label for="addkey">Add key (fe_oa_…) — one or many, space/newline separated</label>
+    <textarea id="addkey" placeholder="fe_oa_..."></textarea>
+    <button id="addBtn">Add key(s)</button>
+    <span id="addMsg" class="hint" style="margin-left:10px"></span>
   </section>
 
   <div class="grid">
@@ -82,7 +102,7 @@ async function status(){
   else{b.textContent='down';b.classList.add('err');return;}
   $('#ver').textContent='v'+(d.version||'')+' · up '+d.uptime_s+'s';
   const kv=$('#status');kv.innerHTML='';
-  const rows=[['base URL',location.origin],['API endpoint',location.origin+'/v1/messages'],['upstream','https://'+d.upstream+'/v1/messages?beta=true'],['key',d.key],['device_id',d.device_id],['session_id',d.session_id]];
+  const rows=[['base URL',location.origin],['Anthropic',location.origin+'/v1/messages'],['OpenAI',location.origin+'/v1/chat/completions'],['upstream','https://'+d.upstream+'/v1/messages?beta=true'],['keys',d.keys.total+' (active #'+d.keys.current+': '+d.keys.currentMasked+')'],['device_id',d.device_id],['session_id',d.session_id]];
   rows.forEach(([k,v])=>{const dt=document.createElement('dt');dt.textContent=k;const dd=document.createElement('dd');dd.textContent=v;kv.append(dt,dd);});
 }
 async function models(){
@@ -110,11 +130,38 @@ async function refreshLogs(){
   });
   if(!el.children.length){const sp=document.createElement('span');sp.className='muted';sp.textContent='no requests yet';el.append(sp);}
 }
+async function refreshKeys(){
+  const[s,d]=await json('/api/keys');if(s!==200)return;
+  const el=$('#keys');
+  if(!d.keys||!d.keys.length){el.innerHTML='<span class="muted">(no keys — add below)</span>';return;}
+  let h='<table><thead><tr><th></th><th>#</th><th>key</th><th>status</th><th>last</th><th>reqs</th><th></th></tr></thead><tbody>';
+  for(const k of d.keys){
+    const chips=[];
+    if(k.current)chips.push('<span class="chip cur">active</span>');
+    if(k.bad)chips.push('<span class="chip bad">BAD</span>');
+    if(k.limited)chips.push('<span class="chip lim">lim×'+k.limited+'</span>');
+    if(k.ok)chips.push('<span class="chip ok">ok×'+k.ok+'</span>');
+    h+='<tr><td>'+(k.current?'★':'·')+'</td><td>'+k.index+'</td><td>'+k.masked+'</td><td>'+chips.join(' ')+'</td><td>'+(k.lastStatus||'')+'</td><td>'+k.count+'</td><td><button class="del" data-i="'+k.index+'">rm</button></td></tr>';
+  }
+  h+='</tbody></table>';
+  el.innerHTML=h;
+  el.querySelectorAll('.del').forEach(b=>b.onclick=async()=>{await json('/api/keys',{method:'DELETE',headers:{'content-type':'application/json'},body:JSON.stringify({index:parseInt(b.dataset.i,10)})});refreshKeys();});
+}
+async function addKeys(){
+  const ta=$('#addkey');const raw=ta.value.trim();if(!raw)return;
+  const keys=raw.split(/[\s,]+/).filter(x=>x);
+  const[s,d]=await json('/api/keys',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({keys})});
+  const m=$('#addMsg');m.textContent=s===200?('added '+d.added+', total '+d.total):('failed: '+JSON.stringify(d));
+  if(s===200)ta.value='';
+  setTimeout(()=>{m.textContent='';},3000);
+  refreshKeys();
+}
 $('#run').onclick=test;
-$('#refresh').onclick=()=>{status();models();refreshLogs();};
+$('#refresh').onclick=()=>{status();models();refreshLogs();refreshKeys();};
 $('#refLogs').onclick=refreshLogs;
-status();models();refreshLogs();
-setInterval(refreshLogs,4000);
+$('#addBtn').onclick=addKeys;
+status();models();refreshLogs();refreshKeys();
+setInterval(()=>{refreshLogs();refreshKeys();},4000);
 </script>
 </body>
 </html>
