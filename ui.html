@@ -314,7 +314,6 @@ async function test(){
   else { out.textContent = 'HTTP ' + (d.status || s) + ' · ' + (d.proto || '') + ' → ' + (d.path || '') + '\n\n' + (d.raw || d.error || JSON.stringify(d)); }
   refreshLogs();
 }
-async function refreshKeys(){
 async function loadFp(){
   const [s, d] = await json('/api/fingerprint'); if (s !== 200) return;
   const kv = $('#fp'); kv.innerHTML = '';
@@ -332,6 +331,7 @@ async function saveFp(){
   const m = $('#fpMsg'); m.textContent = (s === 200) ? 'применено: ' + (d.profile && d.profile.capturedFrom || 'ok') : ('ошибка: ' + JSON.stringify(d));
   setTimeout(() => { m.textContent = ''; }, 3500);
 }
+async function refreshKeys(){
   const [s, d] = await json('/api/keys'); if (s !== 200) return;
   const el = $('#keys');
   const cur = (d.keys || []).find((k) => k.current);
