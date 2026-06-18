@@ -32,10 +32,11 @@ const LOG_FILE = process.env.FMCC_LOG_FILE || path.join(CONFIG_DIR, "proxy.log")
 const UI_FILE = path.join(__dirname, "ui.html");
 
 function loadConfig() {
-  const cfg = { port: 11440, upstream: "cc.freemodel.dev", key: "" };
+  const cfg = { port: 11440, upstream: "cc.freemodel.dev", upstreamOpenai: "api.freemodel.dev", key: "" };
   try { Object.assign(cfg, JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"))); } catch {}
   if (process.env.FMCC_PORT) cfg.port = parseInt(process.env.FMCC_PORT, 10);
   if (process.env.FMCC_UPSTREAM) cfg.upstream = process.env.FMCC_UPSTREAM;
+  if (process.env.FMCC_UPSTREAM_OPENAI) cfg.upstreamOpenai = process.env.FMCC_UPSTREAM_OPENAI;
   if (process.env.FMCC_KEY) cfg.key = process.env.FMCC_KEY;
   return cfg;
 }
@@ -562,6 +563,206 @@ function passthroughGet(reqUrl, clientHeaders, cres) {
   up.end();
 }
 
+// ─── GPT / OpenAI-host (api.freemodel.dev) routing ────────────────────────
+// FreeModel's GPT models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex) live
+// on api.freemodel.dev, which speaks OpenAI Chat Completions natively with no
+// client fingerprint gate. The same fe_oa key works. We route by model id:
+// gpt-* goes straight to the OpenAI host (no Anthropic translation, no
+// fingerprint); claude-* keeps the cc.freemodel.dev fingerprint path.
+function isGptModel(id) {
+  if (!id) return false;
+  return /^gpt-/i.test(id) || /gpt-5/i.test(id);
+}
+
+function buildOpenAIUpstreamHeaders(bodyBuf, key) {
+  const headers = {
+    "host": CFG.upstreamOpenai,
+    "user-agent": UA,
+    "accept": "application/json",
+    "content-type": "application/json",
+  };
+  if (bodyBuf && bodyBuf.length) headers["content-length"] = Buffer.byteLength(bodyBuf);
+  const k = key || CFG.key || currentKey();
+  if (k) { headers["authorization"] = "Bearer " + k; }
+  return headers;
+}
+
+// Forward an OpenAI Chat Completions body as-is to api.freemodel.dev and pipe
+// the response straight back (the host already speaks OpenAI, stream + non-
+// stream). Key rotation on 401/402/429/5xx, same as the Claude path.
+function postOpenAIDirectWithRetry(bodyBuf, cres, model, logEntry) {
+  const maxAttempts = Math.max(1, KEY_POOL.length);
+  let attempts = 0;
+  function attempt() {
+    if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool")); return; }
+    const key = currentKey();
+    attempts++;
+    const headers = buildOpenAIUpstreamHeaders(bodyBuf, key);
+    const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers }, (upres) => {
+      const st = upres.statusCode || 0;
+      const s = ensureStats(key);
+      s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
+      if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
+        upres.resume();
+        if (st === 401) s.bad = true; else s.limited++;
+        const note = maskKey(key) + "->" + st;
+        advancePointer();
+        logEntry.note = logEntry.note ? logEntry.note + " " + note + "->retry" : note + "->retry";
+        attempt();
+        return;
+      }
+      if (st >= 200 && st < 300) s.ok++;
+      logEntry.status = st;
+      // pass upstream headers through but fix framing for the client
+      cres.writeHead(st || 502, upres.headers);
+      upres.pipe(cres);
+      upres.on("end", () => pushLog(logEntry));
+    });
+    up.on("error", (e) => {
+      if (attempts < maxAttempts) { advancePointer(); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "neterr->retry"; attempt(); }
+      else proxyError(cres, logEntry, e);
+    });
+    up.write(bodyBuf);
+    up.end();
+  }
+  attempt();
+}
+
+// Anthropic Messages request → OpenAI Chat Completions request (for /v1/messages
+// with a GPT model). Mirrors oaiToAnthropic in reverse.
+function anthropicToOpenAIRequest(ant) {
+  const out = {
+    model: ant.model || "gpt-5.4-mini",
+    max_tokens: ant.max_tokens || 4096,
+    messages: [],
+    stream: ant.stream === true,
+  };
+  if (ant.temperature != null) out.temperature = ant.temperature;
+  if (ant.top_p != null) out.top_p = ant.top_p;
+  if (Array.isArray(ant.stop_sequences)) out.stop = ant.stop_sequences;
+  const systemParts = [];
+  if (Array.isArray(ant.system)) {
+    for (const b of ant.system) systemParts.push(typeof b === "string" ? b : (b.text || ""));
+  } else if (typeof ant.system === "string") {
+    systemParts.push(ant.system);
+  }
+  const conv = [];
+  if (systemParts.length) conv.push({ role: "system", content: systemParts.join("\n\n") });
+  for (const m of ant.messages || []) {
+    if (m.role === "user" || m.role === "assistant") {
+      conv.push({ role: m.role, content: anthropicContentToOpenAI(m.content) });
+    } else if (m.role === "tool" || (Array.isArray(m.content) && m.content.some((b) => b.type === "tool_result"))) {
+      const blocks = Array.isArray(m.content) ? m.content : [];
+      for (const b of blocks) {
+        if (b.type === "tool_result") {
+          conv.push({ role: "tool", tool_call_id: b.tool_use_id, content: typeof b.content === "string" ? b.content : JSON.stringify(b.content) });
+        }
+      }
+    }
+  }
+  out.messages = conv;
+  if (Array.isArray(ant.tools)) {
+    out.tools = ant.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description || "", parameters: t.input_schema || { type: "object", properties: {} } } }));
+  }
+  if (ant.tool_choice) {
+    if (ant.tool_choice.type === "auto" || ant.tool_choice.type === "none") out.tool_choice = ant.tool_choice.type;
+    else if (ant.tool_choice.type === "any") out.tool_choice = "required";
+    else if (ant.tool_choice.type === "tool") out.tool_choice = { type: "function", function: { name: ant.tool_choice.name } };
+  }
+  return out;
+}
+
+function anthropicContentToOpenAI(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts = [];
+  for (const b of content) {
+    if (b.type === "text") parts.push({ type: "text", text: b.text || "" });
+    else if (b.type === "tool_use") parts.push(null); // handled via assistant tool_calls below
+    else if (b.type === "image") {
+      const src = b.source || {};
+      if (src.type === "base64") parts.push({ type: "image_url", image_url: { url: `data:${src.media_type};base64,${src.data}` } });
+      else if (src.type === "url") parts.push({ type: "image_url", image_url: { url: src.url } });
+    }
+  }
+  return parts.filter(Boolean);
+}
+
+// OpenAI Chat Completions non-stream response → Anthropic Messages object.
+function openAIResponseToAnthropic(oai) {
+  const choice = (oai.choices && oai.choices[0]) || {};
+  const msg = choice.message || {};
+  const content = [];
+  if (typeof msg.content === "string" && msg.content) content.push({ type: "text", text: msg.content });
+  if (Array.isArray(msg.tool_calls)) {
+    for (const tc of msg.tool_calls) {
+      let input = {};
+      try { input = tc.function && tc.function.arguments ? JSON.parse(tc.function.arguments) : {}; } catch {}
+      content.push({ type: "tool_use", id: tc.id, name: (tc.function || {}).name, input });
+    }
+  }
+  const sr = choice.finish_reason;
+  const stopReason = sr === "stop" ? "end_turn" : sr === "tool_calls" ? "tool_use" : sr === "length" ? "max_tokens" : sr || "end_turn";
+  const u = oai.usage || {};
+  return {
+    id: oai.id || ("msg_" + crypto.randomUUID()),
+    type: "message", role: "assistant", model: oai.model || "gpt",
+    content: content.length ? content : [{ type: "text", text: "" }],
+    stop_reason: stopReason, stop_sequence: null,
+    usage: { input_tokens: u.prompt_tokens || 0, output_tokens: u.completion_tokens || 0 },
+  };
+}
+
+// Translate OpenAI Chat Completions SSE → Anthropic Messages SSE, so an
+// Anthropic-protocol client streaming a GPT model gets native events.
+function openAIStreamToAnthropic(upres, cres, model, logEntry) {
+  const data = [];
+  if (upres.statusCode !== 200) {
+    upres.on("data", (c) => data.push(c));
+    upres.on("end", () => {
+      logEntry.status = upres.statusCode; pushLog(logEntry);
+      const text = Buffer.concat(data).toString("utf8");
+      cres.writeHead(upres.statusCode || 502, { "content-type": "application/json" });
+      cres.end(text);
+    });
+    return;
+  }
+  logEntry.status = 200;
+  cres.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", "connection": "keep-alive" });
+  const msgId = "msg_" + crypto.randomUUID();
+  const emit = (obj) => cres.write("event: " + obj.type + "\ndata: " + JSON.stringify(obj) + "\n\n");
+  emit({ type: "message_start", message: { id: msgId, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } });
+  emit({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+  let buf = "";
+  let finish = "end_turn";
+  upres.on("data", (chunk) => {
+    buf += chunk.toString("utf8");
+    const lines = buf.split("\n");
+    buf = lines.pop();
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let ev;
+      try { ev = JSON.parse(payload); } catch { continue; }
+      const d = ev.choices && ev.choices[0] && ev.choices[0].delta;
+      if (d && typeof d.content === "string" && d.content) {
+        emit({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: d.content } });
+      }
+      const fr = ev.choices && ev.choices[0] && ev.choices[0].finish_reason;
+      if (fr) finish = fr === "stop" ? "end_turn" : fr === "tool_calls" ? "tool_use" : fr === "length" ? "max_tokens" : "end_turn";
+    }
+  });
+  upres.on("end", () => {
+    emit({ type: "content_block_stop", index: 0 });
+    emit({ type: "message_delta", delta: { stop_reason: finish, stop_sequence: null }, usage: { output_tokens: 0 } });
+    emit({ type: "message_stop" });
+    cres.end();
+    pushLog(logEntry);
+  });
+}
+
 // POST to upstream /v1/messages?beta=true with key rotation. On a rotatable
 // status (401/402/429/5xx) it advances to the next key and retries the SAME
 // request — at most once per key in the pool — so the client sees no break.
@@ -647,7 +848,8 @@ const server = http.createServer((creq, cres) => {
       session_id: SESSION_ID,
       version: require("./package.json").version,
       uptime_s: Math.round(process.uptime()),
-      endpoints: ["POST /v1/messages (Anthropic, stream + non-stream)", "POST /v1/chat/completions (OpenAI, stream + non-stream)", "GET /v1/models"],
+      endpoints: ["POST /v1/messages (Anthropic; claude-* → cc host, gpt-* → api host)", "POST /v1/chat/completions (OpenAI; gpt-* → api host direct, claude-* → cc host)", "GET /v1/models (merged: Claude + GPT)"],
+      upstreams: { claude: CFG.upstream, openai: CFG.upstreamOpenai },
     });
     return;
   }
@@ -725,36 +927,50 @@ const server = http.createServer((creq, cres) => {
       try { reqBody = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { reqBody = {}; }
       const model = reqBody.model || "claude-opus-4-8";
       const prompt = reqBody.prompt || "Reply with exactly: ok";
-      const body = JSON.stringify({
-        model,
-        max_tokens: 64,
-        stream: false,
-        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      });
+      const logEntry = { kind: "test", method: "POST", path: isGptModel(model) ? "/v1/chat/completions" : "/v1/messages", status: null, note: model };
+      const finish = (status, ok, raw) => { logEntry.status = status; pushLog(logEntry); sendJson(cres, status, { ok, model, status, raw }); };
+
+      if (isGptModel(model)) {
+        // GPT model → api.freemodel.dev via OpenAI Chat Completions (non-stream for the UI)
+        const oai = { model, max_tokens: 64, stream: false, messages: [{ role: "user", content: prompt }] };
+        const obuf = Buffer.from(JSON.stringify(oai));
+        const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers: buildOpenAIUpstreamHeaders(obuf, currentKey()) }, (upres) => {
+          const data = []; upres.on("data", (c) => data.push(c));
+          upres.on("end", () => {
+            const text = Buffer.concat(data).toString("utf8");
+            const st = upres.statusCode || 502;
+            if (st !== 200) { finish(st, false, text); return; }
+            let out = text;
+            try { const d = JSON.parse(text); out = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || text; } catch {}
+            finish(st, true, out);
+          });
+        });
+        up.on("error", (e) => finish(502, false, e.message));
+        up.write(obuf); up.end();
+        return;
+      }
+
+      // Claude model → cc.freemodel.dev via Anthropic Messages (fingerprinted)
+      const body = JSON.stringify({ model, max_tokens: 64, stream: false, messages: [{ role: "user", content: [{ type: "text", text: prompt }] }] });
       const injected = injectFingerprint(body);
       const buf = Buffer.from(injected.body);
-      const logEntry = { kind: "test", method: "POST", path: "/v1/messages", status: null, note: model };
       const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers: buildUpstreamHeaders(buf, currentKey()) }, (upres) => {
         const data = [];
         upres.on("data", (c) => data.push(c));
         upres.on("end", () => {
           const text = Buffer.concat(data).toString("utf8");
-          logEntry.status = upres.statusCode; pushLog(logEntry);
-          const isErr = upres.statusCode !== 200;
+          const st = upres.statusCode || 502;
+          if (st !== 200) { finish(st, false, text); return; }
+          const r = collectAnthropicMessage(text);
           let out = text;
-          if (!isErr) {
-            const r = collectAnthropicMessage(text);
-            if (r.ok) {
-              const txt = (r.message.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
-              if (txt) out = txt;
-            } else {
-              out = JSON.stringify(r.error || {});
-            }
-          }
-          sendJson(cres, upres.statusCode, { ok: !isErr, model, status: upres.statusCode, raw: out });
+          if (r.ok) {
+            const txt = (r.message.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+            if (txt) out = txt;
+          } else out = JSON.stringify(r.error || {});
+          finish(st, r.ok, out);
         });
       });
-      up.on("error", (e) => { logEntry.status = 502; logEntry.note = e.message; pushLog(logEntry); sendJson(cres, 502, { ok: false, error: e.message }); });
+      up.on("error", (e) => finish(502, false, e.message));
       up.write(buf); up.end();
     });
     return;
@@ -766,6 +982,54 @@ const server = http.createServer((creq, cres) => {
     creq.on("data", (c) => chunks.push(c));
     creq.on("end", () => {
       const raw = Buffer.concat(chunks).toString("utf8");
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { sendJson(cres, 400, { type: "error", error: { type: "invalid_request", message: "body is not valid JSON" } }); return; }
+      // GPT model via Anthropic protocol → translate to OpenAI, hit api.freemodel.dev
+      if (isGptModel(parsed.model)) {
+        const oai = anthropicToOpenAIRequest(parsed);
+        const clientStream = oai.stream === true;
+        const obuf = Buffer.from(JSON.stringify(oai));
+        const logEntry = { kind: "openai", method: "POST", path: "/v1/messages→gpt", status: null, note: parsed.model + (clientStream ? " stream" : " nonstream") };
+        if (clientStream) {
+          // stream OpenAI response → translate SSE to Anthropic events
+          const headers = buildOpenAIUpstreamHeaders(obuf, currentKey());
+          const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers }, (upres) => openAIStreamToAnthropic(upres, cres, parsed.model, logEntry));
+          up.on("error", (e) => proxyError(cres, logEntry, e));
+          up.write(obuf); up.end();
+        } else {
+          // non-stream: buffer OpenAI JSON, translate one-shot to Anthropic Message
+          const maxAttempts = Math.max(1, KEY_POOL.length);
+          let attempts = 0;
+          (function attempt() {
+            if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool")); return; }
+            const key = currentKey(); attempts++;
+            const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers: buildOpenAIUpstreamHeaders(obuf, key) }, (upres) => {
+              const st = upres.statusCode || 0;
+              const s = ensureStats(key); s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
+              if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
+                upres.resume(); if (st === 401) s.bad = true; else s.limited++;
+                logEntry.note = maskKey(key) + "->" + st + "->retry"; advancePointer(); attempt(); return;
+              }
+              if (st >= 200 && st < 300) s.ok++;
+              const data = []; upres.on("data", (c) => data.push(c));
+              upres.on("end", () => {
+                const text = Buffer.concat(data).toString("utf8");
+                logEntry.status = st; pushLog(logEntry);
+                if (st !== 200) { cres.writeHead(st || 502, { "content-type": "application/json" }); cres.end(text); return; }
+                let oai; try { oai = JSON.parse(text); } catch { cres.writeHead(502, { "content-type": "application/json" }); cres.end(JSON.stringify({ type: "error", error: { type: "proxy_error", message: "bad upstream json" } })); return; }
+                const ant = openAIResponseToAnthropic(oai);
+                const buf = Buffer.from(JSON.stringify(ant));
+                cres.writeHead(200, { "content-type": "application/json", "content-length": buf.length });
+                cres.end(buf);
+              });
+            });
+            up.on("error", (e) => { if (attempts < maxAttempts) { advancePointer(); attempt(); } else proxyError(cres, logEntry, e); });
+            up.write(obuf); up.end();
+          })();
+        }
+        return;
+      }
+      // Claude model → fingerprint + cc.freemodel.dev (existing path)
       const inj = injectFingerprint(raw);
       if (!inj.ok) { sendJson(cres, 400, { type: "error", error: { type: "invalid_request", message: "body is not valid JSON" } }); return; }
       const buf = Buffer.from(inj.body);
@@ -786,6 +1050,14 @@ const server = http.createServer((creq, cres) => {
         sendJson(cres, 400, { error: { message: "invalid JSON body: " + e.message, type: "invalid_request_error" } });
         return;
       }
+      // GPT model → forward OpenAI body as-is to api.freemodel.dev (no translation, no fingerprint)
+      if (isGptModel(oai.model)) {
+        const obuf = Buffer.from(JSON.stringify(oai));
+        const logEntry = { kind: "openai", method: "POST", path: "/v1/chat/completions→gpt", status: null, note: oai.model + (oai.stream === true ? " stream" : " nonstream") };
+        postOpenAIDirectWithRetry(obuf, cres, oai.model, logEntry);
+        return;
+      }
+      // Claude model → translate OpenAI→Anthropic, fingerprint, cc.freemodel.dev
       const ant = oaiToAnthropic(oai);
       const inj = injectFingerprint(JSON.stringify(ant));
       if (!inj.ok) { sendJson(cres, 400, { error: { message: "failed to translate request", type: "invalid_request_error" } }); return; }
@@ -797,9 +1069,34 @@ const server = http.createServer((creq, cres) => {
     return;
   }
 
-  // API: /v1/models (passthrough — already OpenAI-shape model list)
+  // API: /v1/models — merged: Claude from cc.freemodel.dev + GPT from api.freemodel.dev
   if (url === "/v1/models" || url.startsWith("/v1/models")) {
-    passthroughGet(creq.url, creq.headers, cres);
+    const logEntry = { kind: "api", method: "GET", path: "/v1/models", status: null };
+    function fetchModels(host) {
+      return new Promise((resolve) => {
+        const headers = { host, "user-agent": UA, "accept": "application/json" };
+        const k = currentKey();
+        if (k) headers["authorization"] = "Bearer " + k;
+        if (host === CFG.upstream) headers["x-api-key"] = k;
+        const up = https.request({ host, port: 443, method: "GET", path: "/v1/models", headers }, (upres) => {
+          const data = []; upres.on("data", (c) => data.push(c));
+          upres.on("end", () => {
+            try { resolve(JSON.parse(Buffer.concat(data).toString("utf8")).data || []); }
+            catch { resolve([]); }
+          });
+        });
+        up.on("error", () => resolve([]));
+        up.setTimeout(10000, () => { try { up.destroy(); } catch {} resolve([]); });
+        up.end();
+      });
+    }
+    Promise.all([fetchModels(CFG.upstream), fetchModels(CFG.upstreamOpenai)]).then(([claude, gpt]) => {
+      logEntry.status = 200; pushLog(logEntry);
+      const data = [].concat(claude, gpt);
+      const buf = Buffer.from(JSON.stringify({ object: "list", data }));
+      cres.writeHead(200, { "content-type": "application/json", "content-length": buf.length });
+      cres.end(buf);
+    });
     return;
   }
 
@@ -808,10 +1105,10 @@ const server = http.createServer((creq, cres) => {
 
 server.listen(CFG.port, "127.0.0.1", () => {
   console.log("freemodel-cc-proxy " + require("./package.json").version);
-  console.log("  Anthropic: http://127.0.0.1:" + CFG.port + "/v1/messages  (stream + non-stream)");
-  console.log("  OpenAI    : http://127.0.0.1:" + CFG.port + "/v1/chat/completions  (stream + non-stream)");
-  console.log("  Models    : http://127.0.0.1:" + CFG.port + "/v1/models");
+  console.log("  Anthropic: http://127.0.0.1:" + CFG.port + "/v1/messages  (claude-* → cc, gpt-* → api)");
+  console.log("  OpenAI    : http://127.0.0.1:" + CFG.port + "/v1/chat/completions  (gpt-* → api direct, claude-* → cc)");
+  console.log("  Models    : http://127.0.0.1:" + CFG.port + "/v1/models  (merged Claude + GPT)");
   console.log("  UI        : http://127.0.0.1:" + CFG.port + "/");
-  console.log("  upstream  : https://" + CFG.upstream);
+  console.log("  upstreams : claude=https://" + CFG.upstream + "  openai=https://" + CFG.upstreamOpenai);
   console.log("  keys      : " + KEY_POOL.length + " (active: " + maskKey(currentKey()) + ", rotate on 401/402/429/5xx)");
 });
