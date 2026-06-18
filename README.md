@@ -114,6 +114,7 @@ Manage keys live (updates the running proxy + persists `~/.freemodel-cc-proxy/ke
 
 ```bash
 node keys.js                       # list keys (masked, status, reqs)
+node keys.js find                  # probe forward, lock onto the FIRST working key
 node keys.js add fe_oa_...         # add one
 node keys.js add fe_oa_... fe_oa_...   # add several
 node keys.js rm 3                  # remove by index
@@ -121,10 +122,17 @@ node keys.js rm fe_oa_...          # remove by exact key
 node keys.js status                # pool summary
 ```
 
-Or from the web UI (`/` → "Key pool" card), or programmatically via the HTTP API:
+`find` does a sequential forward health probe (tiny `haiku` request, `max_tokens:1`),
+**stops at the first `200`**, marks dead keys (`401`→bad, `402/429`→limited) and locks
+the pointer onto the working one — leaving the rest untouched. Minimal requests, with a
+short pause between probes, so your IP doesn't look abusive. Use it after adding a batch
+of keys to immediately land on the first good one without your workload triggering rotation.
+
+Or from the web UI (`/` → "Key pool" card: **Find first working** button), or via HTTP:
 
 ```bash
 curl localhost:11440/api/keys                                  # GET  — list
+curl -X POST localhost:11440/api/keys/find                    # POST — find first working
 curl -X POST localhost:11440/api/keys -H 'content-type: application/json' \
   -d '{"keys":["fe_oa_...","fe_oa_..."]}'                      # POST — add
 curl -X DELETE localhost:11440/api/keys -H 'content-type: application/json' \

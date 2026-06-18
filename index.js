@@ -75,6 +75,45 @@ function advancePointer() {
 }
 function reloadKeyStats() { KEY_POOL.forEach(ensureStats); }
 
+// Sequential forward health probe: find the FIRST working key, lock the pointer
+// onto it, leave the rest untouched. Stops at the first 200 (minimal requests,
+// IP-friendly). Dead keys encountered are marked (401 -> bad, others -> limited).
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function probeOnce(body, key) {
+  return new Promise((resolve) => {
+    const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers: buildUpstreamHeaders(body, key) }, (upres) => {
+      upres.resume();
+      upres.on("end", () => resolve({ status: upres.statusCode || 0 }));
+    });
+    up.on("error", () => resolve({ status: 0 }));
+    up.setTimeout(15000, () => { try { up.destroy(); } catch {} resolve({ status: 0 }); });
+    up.write(body);
+    up.end();
+  });
+}
+async function findFirstWorking() {
+  if (!KEY_POOL.length) return { ok: false, error: "empty pool" };
+  const probeBody = Buffer.from(injectFingerprint(JSON.stringify({
+    model: "claude-haiku-4-5-20251001", max_tokens: 1, stream: false,
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+  })).body);
+  const start = keyIdx;
+  const tried = [];
+  for (let step = 0; step < KEY_POOL.length; step++) {
+    const i = (start + step) % KEY_POOL.length;
+    const key = KEY_POOL[i];
+    const s = ensureStats(key);
+    if (s.bad) { tried.push({ index: i, masked: maskKey(key), status: "skip(bad)" }); continue; }
+    const res = await probeOnce(probeBody, key);
+    s.lastStatus = res.status; s.lastUsed = new Date().toISOString(); s.count++;
+    if (res.status === 200) { s.ok++; keyIdx = i; return { ok: true, current: i, masked: maskKey(key), probed: step + 1, tried }; }
+    if (res.status === 401) s.bad = true; else if (ROTATE_STATUSES.has(res.status)) s.limited++;
+    tried.push({ index: i, masked: maskKey(key), status: res.status || "neterr" });
+    await sleep(400); // gentle pacing so the IP doesn't look abusive
+  }
+  return { ok: false, current: keyIdx, probed: tried.length, tried, error: "no working key in pool" };
+}
+
 if (!KEY_POOL.length) {
   console.error("No FreeModel keys configured. Add one (or many):");
   console.error("  node keys.js add fe_oa_...");
@@ -670,6 +709,12 @@ const server = http.createServer((creq, cres) => {
       });
       return;
     }
+    return;
+  }
+  // Find the first working key (forward probe, stop on first 200, lock pointer).
+  if (url === "/api/keys/find" && creq.method === "POST") {
+    readJsonBody(creq, async () => { const r = await findFirstWorking(); sendJson(cres, 200, r); });
+    return;
   }
 
   if (url === "/api/test" && creq.method === "POST") {

@@ -68,7 +68,7 @@
     <div id="keys"><span class="muted">loading…</span></div>
     <label for="addkey">Add key (fe_oa_…) — one or many, space/newline separated</label>
     <textarea id="addkey" placeholder="fe_oa_..."></textarea>
-    <button id="addBtn">Add key(s)</button>
+    <div class="row"><button id="addBtn">Add key(s)</button><button class="ghost" id="findBtn" style="margin-top:0">Find first working</button></div>
     <span id="addMsg" class="hint" style="margin-left:10px"></span>
   </section>
 
@@ -156,10 +156,19 @@ async function addKeys(){
   setTimeout(()=>{m.textContent='';},3000);
   refreshKeys();
 }
+async function findWorking(){
+  const m=$('#addMsg');m.textContent='probing…';
+  const[s,d]=await json('/api/keys/find',{method:'POST'});
+  if(d.ok){m.textContent='locked #'+d.current+' '+d.masked+' ('+d.probed+' probe)';}
+  else{m.textContent='no working key ('+(d.probed||0)+' probed)';}
+  setTimeout(()=>{m.textContent='';},4000);
+  refreshKeys();
+}
 $('#run').onclick=test;
 $('#refresh').onclick=()=>{status();models();refreshLogs();refreshKeys();};
 $('#refLogs').onclick=refreshLogs;
 $('#addBtn').onclick=addKeys;
+$('#findBtn').onclick=findWorking;
 status();models();refreshLogs();refreshKeys();
 setInterval(()=>{refreshLogs();refreshKeys();},4000);
 </script>
