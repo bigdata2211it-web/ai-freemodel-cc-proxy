@@ -48,6 +48,10 @@
   .chip.lim{color:var(--muted)}
   .del{font:600 11px system-ui;background:transparent;color:var(--err);border:1px solid rgba(248,81,73,.3);border-radius:4px;padding:2px 8px;cursor:pointer}
   .del:hover{background:rgba(248,81,73,.12)}
+  details.docs{margin-top:6px}
+  details.docs summary{cursor:pointer;color:var(--accent);font:600 13px system-serif}
+  pre.code{background:#000;border:1px solid var(--border);border-radius:6px;padding:10px;font:12px var(--mono);color:#cfe;color:var(--ink);overflow:auto;margin:8px 0 4px}
+  pre.code .k{color:var(--accent)}pre.code .c{color:var(--muted)}
  </style>
 </head>
 <body>
@@ -90,6 +94,44 @@
       <button class="ghost" id="refLogs" style="margin-top:12px">Refresh logs</button>
     </section>
   </div>
+
+  <details class="card docs">
+    <summary>Agent / automation docs (for AI agents & scripts)</summary>
+    <p class="hint">Base URL <code id="docBase">http://127.0.0.1:11440</code> · Auth header optional (any value; the proxy injects the real key from the pool).</p>
+
+    <h2 style="margin-top:14px">Manage the key pool</h2>
+<pre class="code"><span class="c"># list keys (masked, with status + counts)</span>
+<span class="k">GET</span> /api/keys
+→ { "total": 2, "current": 0, "keys": [ { "index":0, "masked":"fe_oa_1e…a242", "current":true, "ok":3, "limited":0, "bad":false, "count":3, "lastStatus":200, "lastUsed":"…" } ] }
+
+<span class="c"># add one or many keys (the pool is persisted, dedup'd)</span>
+<span class="k">POST</span> /api/keys        {"keys":["fe_oa_…","fe_oa_…"]}
+→ { "ok":true, "added":2, "total":4 }
+
+<span class="c"># remove by index (from GET) or by exact key</span>
+<span class="k">DELETE</span> /api/keys     {"index":0}     <span class="c"># or  {"key":"fe_oa_…"}</span>
+
+<span class="c"># probe forward, lock onto the FIRST working key (minimal requests)</span>
+<span class="k">POST</span> /api/keys/find   {}
+→ { "ok":true, "current":1, "masked":"fe_oa_9b…1d39", "probed":2, "tried":[…] }</pre>
+
+    <h2 style="margin-top:14px">Chat — real Claude</h2>
+<pre class="code"><span class="c"># OpenAI Chat Completions (stream + non-stream, tools/function-calling)</span>
+<span class="k">POST</span> /v1/chat/completions   {"model":"claude-opus-4-8","messages":[…],"stream":false}
+
+<span class="c"># Anthropic Messages (stream + non-stream, tools/tool_use)</span>
+<span class="k">POST</span> /v1/messages            {"model":"claude-opus-4-8","max_tokens":1024,…}
+
+<span class="c"># models</span>
+<span class="k">GET</span>  /v1/models</pre>
+
+    <h2 style="margin-top:14px">curl — add a key from a script</h2>
+<pre class="code">curl -X POST http://127.0.0.1:11440/api/keys \
+  -H 'content-type: application/json' \
+  -d '{"keys":["fe_oa_…"]}'
+<span class="c"># or use the bundled CLI:  node keys.js add fe_oa_…</span></pre>
+    <p class="hint">Models: <code>claude-opus-4-8</code>, <code>claude-sonnet-4-6</code>, <code>claude-opus-4-7</code>, <code>claude-opus-4-6</code>, <code>claude-haiku-4-5-20251001</code>, <code>claude-fable-5</code>.</p>
+  </details>
 </main>
 
 <script>
@@ -101,6 +143,7 @@ async function status(){
   if(s===200){b.textContent='running';b.classList.remove('err');}
   else{b.textContent='down';b.classList.add('err');return;}
   $('#ver').textContent='v'+(d.version||'')+' · up '+d.uptime_s+'s';
+  const db=$('#docBase'); if(db) db.textContent=location.origin;
   const kv=$('#status');kv.innerHTML='';
   const rows=[['base URL',location.origin],['Anthropic',location.origin+'/v1/messages'],['OpenAI',location.origin+'/v1/chat/completions'],['upstream','https://'+d.upstream+'/v1/messages?beta=true'],['keys',d.keys.total+' (active #'+d.keys.current+': '+d.keys.currentMasked+')'],['device_id',d.device_id],['session_id',d.session_id]];
   rows.forEach(([k,v])=>{const dt=document.createElement('dt');dt.textContent=k;const dd=document.createElement('dd');dd.textContent=v;kv.append(dt,dd);});
