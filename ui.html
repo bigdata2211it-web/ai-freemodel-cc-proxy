@@ -19,6 +19,10 @@
     --accent:    oklch(76% 0.13 70);
     --accent-ink:oklch(22% 0.03 70);
     --accent-soft:oklch(76% 0.13 70 / 12%);
+    --claude:    oklch(76% 0.13 70);
+    --claude-soft:oklch(76% 0.13 70 / 12%);
+    --gpt:       oklch(72% 0.10 240);
+    --gpt-soft:  oklch(72% 0.10 240 / 12%);
     --ok:   oklch(75% 0.12 152);
     --warn: oklch(78% 0.13 75);
     --err:  oklch(68% 0.18 22);
@@ -31,45 +35,47 @@
     --tnum:"tnum" 1,"lnum" 1;
   }
   @media (prefers-reduced-motion:reduce){ *{transition:none!important;animation:none!important} }
-
   *{box-sizing:border-box}
   html,body{margin:0}
-  body{
-    font-family:var(--sans);background:var(--bg);color:var(--ink-2);line-height:1.5;
+  body{font-family:var(--sans);background:var(--bg);color:var(--ink-2);line-height:1.5;
     -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
-    background-image:radial-gradient(70% 40% at 50% -8%,oklch(76% 0.13 70 / 6%),transparent 70%);
-  }
-  a{color:var(--accent);text-decoration:none}
-  a:hover{text-decoration:underline}
+    background-image:radial-gradient(70% 40% at 50% -8%,oklch(76% 0.13 70 / 6%),transparent 70%);}
+  a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
   code{font-family:var(--mono);font-size:.85em;background:var(--panel-2);padding:1px 6px;border-radius:6px;color:var(--ink-2)}
-  .muted{color:var(--ink-3)}
-  .faint{color:var(--ink-4)}
+  .muted{color:var(--ink-3)}.faint{color:var(--ink-4)}
   .hint{font-size:12.5px;color:var(--ink-3);margin-top:10px}
-  .tnum{font-feature-settings:var(--tnum)}
-  .mono{font-family:var(--mono)}
+  .tnum{font-feature-settings:var(--tnum)}.mono{font-family:var(--mono)}
 
-  /* header */
-  header.top{
-    position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  header.top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
     padding:14px 24px;background:color-mix(in oklch,var(--bg) 84%,transparent);
-    backdrop-filter:saturate(140%) blur(12px);border-bottom:1px solid var(--line);
-  }
+    backdrop-filter:saturate(140%) blur(12px);border-bottom:1px solid var(--line)}
   .brand{display:flex;align-items:center;gap:11px;font-weight:650;letter-spacing:-.012em;font-size:15px;color:var(--ink)}
   .brand .mark{width:10px;height:10px;border-radius:3px;background:var(--accent);box-shadow:0 0 14px oklch(76% 0.13 70 / .9)}
-  .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ink-4)}
+  .brand .sub{font-size:11.5px;color:var(--ink-4);font-weight:500;letter-spacing:0}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--ink-4)}
   .dot.ok{background:var(--ok);box-shadow:0 0 0 0 oklch(75% 0.12 152 / .5);animation:pulse 2.6s ease-out infinite}
   .dot.err{background:var(--err);animation:pulseE 2s ease-out infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 oklch(75% 0.12 152 / .55%)}70%{box-shadow:0 0 0 7px oklch(75% 0.12 152 / 0)}100%{box-shadow:0 0 0 0 oklch(75% 0.12 152 / 0)}}
-  @keyframes pulseE{0%{box-shadow:0 0 0 0 oklch(68% 0.18 22 / .55%)}70%{box-shadow:0 0 0 7px oklch(68% 0.18 22 / 0)}100%{box-shadow:0 0 0 0 oklch(68% 0.18 22 / 0)}}
+  .dot.off{background:var(--ink-4)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 oklch(75% 0.12 152 / .55)}70%{box-shadow:0 0 0 7px oklch(75% 0.12 152 / 0)}100%{box-shadow:0 0 0 0 oklch(75% 0.12 152 / 0)}}
+  @keyframes pulseE{0%{box-shadow:0 0 0 0 oklch(68% 0.18 22 / .55)}70%{box-shadow:0 0 0 7px oklch(68% 0.18 22 / 0)}100%{box-shadow:0 0 0 0 oklch(68% 0.18 22 / 0)}}
   .badge{font:600 11.5px var(--sans);padding:3px 10px;border-radius:var(--r-pill);color:var(--ok);background:oklch(75% 0.12 152 / 12%);border:1px solid oklch(75% 0.12 152 / 26%)}
   .badge.err{color:var(--err);background:oklch(68% 0.18 22 / 12%);border-color:oklch(68% 0.18 22 / 26%)}
+  .badge.off{color:var(--ink-3);background:var(--panel-2);border-color:var(--line)}
   .ver{color:var(--ink-4);font-family:var(--mono);font-size:12px;font-feature-settings:var(--tnum)}
+  .spacer{flex:1}
 
-  main{max-width:1080px;margin:0 auto;padding:24px;display:flex;flex-direction:column;gap:20px}
+  main{max-width:1120px;margin:0 auto;padding:24px;display:flex;flex-direction:column;gap:20px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);padding:20px;box-shadow:var(--shadow)}
+  .card h2{margin:0 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:650}
+  .card .lead{font-size:15px;font-weight:650;color:var(--ink);letter-spacing:-.01em;margin:0 0 4px}
+  .card .sub{font-size:12.5px;color:var(--ink-4);margin:0 0 16px;font-family:var(--mono)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:880px){.grid{grid-template-columns:1fr}}
 
   /* metrics */
   .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
-  @media(max-width:860px){.metrics{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:880px){.metrics{grid-template-columns:repeat(2,1fr)}}
   .metric{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);padding:14px 16px;transition:transform .14s,border-color .14s}
   .metric:hover{transform:translateY(-1px);border-color:var(--line-2)}
   .metric .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:600}
@@ -77,51 +83,67 @@
   .metric .v.sm{font-size:15px}
   .metric .s{font-size:11.5px;color:var(--ink-4);font-family:var(--mono);font-feature-settings:var(--tnum);margin-top:3px}
 
-  /* cards */
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);padding:18px;box-shadow:var(--shadow)}
-  .card h2{margin:0 0 14px;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:650}
-  .card .sub{font-size:12px;color:var(--ink-4);margin:-8px 0 12px;font-family:var(--mono)}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  /* toggle */
+  .toggle{display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+  .toggle .track{width:42px;height:24px;border-radius:var(--r-pill);background:var(--panel-2);border:1px solid var(--line);position:relative;transition:background .16s,border-color .16s}
+  .toggle .knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--ink-3);transition:transform .16s,background .16s}
+  .toggle[aria-checked="true"] .track{background:var(--accent-soft);border-color:var(--accent)}
+  .toggle[aria-checked="true"] .knob{transform:translateX(18px);background:var(--accent)}
+  .toggle .lbl{font:600 13px var(--sans);color:var(--ink)}
+  .toggle .state{font:600 11px var(--mono);color:var(--ink-4);text-transform:uppercase;letter-spacing:.06em}
 
-  .kv{display:grid;grid-template-columns:120px 1fr;gap:7px 16px;font-size:13px;align-items:baseline}
-  .kv dt{color:var(--ink-3);font-family:var(--mono);font-size:11.5px}
-  .kv dd{margin:0;font-family:var(--mono);font-size:12.5px;word-break:break-all;color:var(--ink-2)}
+  /* routing diagram */
+  .route{display:flex;flex-direction:column;gap:10px;font-family:var(--mono);font-size:12.5px}
+  .route .row{display:flex;align-items:stretch;gap:10px}
+  .route .node{flex:1;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:10px 12px;display:flex;flex-direction:column;gap:3px;min-width:0}
+  .route .node .t{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);font-weight:600}
+  .route .node .d{color:var(--ink-2);font-family:var(--mono);font-size:12px;word-break:break-all}
+  .route .node.claude{border-color:oklch(76% 0.13 70 / 40%);background:var(--claude-soft)}
+  .route .node.gpt{border-color:oklch(72% 0.10 240 / 40%);background:var(--gpt-soft)}
+  .route .arr{display:flex;align-items:center;color:var(--ink-4);font-size:18px;flex:none}
+  .route .branch{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .route .pill{font:600 10px var(--mono);padding:2px 7px;border-radius:var(--r-pill);align-self:flex-start;letter-spacing:.04em}
+  .pill.claude{color:var(--claude);background:var(--claude-soft);border:1px solid oklch(76% 0.13 70 / 30%)}
+  .pill.gpt{color:var(--gpt);background:var(--gpt-soft);border:1px solid oklch(72% 0.10 240 / 30%)}
+  .pill.muted{color:var(--ink-3);background:var(--panel-2);border:1px solid var(--line)}
+  @media(max-width:880px){.route .branch{grid-template-columns:1fr}.route .arr.v{transform:rotate(90deg)}}
 
+  /* models */
   ul.models{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:7px}
-  ul.models li{font:12px var(--mono);padding:4px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);color:var(--ink-2);transition:background .14s,border-color .14s}
-  ul.models li:hover{background:var(--panel-3);border-color:var(--line-2)}
-  ul.models li.m-claude{border-color:oklch(76% 0.13 70 / 40%);color:oklch(82% 0.10 70)}
-  ul.models li.m-gpt{border-color:oklch(72% 0.10 240 / 40%);color:oklch(80% 0.08 240)}
+  ul.models li{font:12px var(--mono);padding:5px 11px;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);color:var(--ink-2)}
+  ul.models li.claude{border-color:oklch(76% 0.13 70 / 40%);color:oklch(82% 0.10 70)}
+  ul.models li.gpt{border-color:oklch(72% 0.10 240 / 40%);color:oklch(80% 0.08 240)}
+  .modelgroup{margin-bottom:14px}
+  .modelgroup .gh{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:650;margin:0 0 8px;display:flex;align-items:center;gap:8px}
 
+  /* controls */
   label{display:block;font-size:11px;color:var(--ink-3);margin:14px 0 6px;font-weight:600;letter-spacing:.02em}
   input,textarea,select{width:100%;font:13px var(--mono);background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:9px 11px;transition:border-color .14s,box-shadow .14s}
   input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
   textarea{resize:vertical;min-height:74px}
-  .row{display:flex;gap:10px;align-items:center}
-  .row>*{flex:1}
-
+  .row{display:flex;gap:10px;align-items:center}.row>*{flex:1}
   .seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);padding:3px;gap:2px}
-  .seg button{border:0;background:transparent;color:var(--ink-3);font:600 12.5px var(--sans);padding:6px 16px;border-radius:var(--r-pill);cursor:pointer;transition:color .14s,background .14s}
+  .seg button{border:0;background:transparent;color:var(--ink-3);font:600 12.5px var(--sans);padding:6px 18px;border-radius:var(--r-pill);cursor:pointer;transition:color .14s,background .14s}
   .seg button[aria-pressed="true"]{color:var(--ink);background:var(--panel-3);box-shadow:var(--shadow-sm)}
-
   button.btn{font:600 13px var(--sans);background:var(--accent);color:var(--accent-ink);border:0;border-radius:var(--r-ctrl);padding:9px 16px;cursor:pointer;transition:filter .14s,transform .06s;display:inline-flex;align-items:center;justify-content:center;gap:7px}
-  button.btn:hover{filter:brightness(1.06)}
-  button.btn:active{transform:translateY(1px)}
+  button.btn:hover{filter:brightness(1.06)}button.btn:active{transform:translateY(1px)}
   button.btn.ghost{background:var(--panel-2);color:var(--ink-2);border:1px solid var(--line-2)}
   button.btn.ghost:hover{background:var(--panel-3)}
+  button.btn[disabled]{opacity:.45;cursor:not-allowed;filter:none}
   :focus-visible{outline:none;box-shadow:0 0 0 3px var(--accent-soft);border-radius:6px}
 
   #testOut{font:12.5px var(--mono);white-space:pre-wrap;word-break:break-word;background:oklch(14% 0.006 264);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:12px;min-height:60px;max-height:280px;overflow:auto;margin-top:14px;color:var(--ink-2)}
+  #testOut .meta{color:var(--ink-4);font-size:11px;margin-bottom:6px}
+  #testOut .ok{color:var(--ok)}#testOut .err{color:var(--err)}
 
-  #logs{font:11.5px var(--mono);background:oklch(14% 0.006 264);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:8px;height:250px;overflow:auto}
-  #logs .ln{display:grid;grid-template-columns:142px 56px 1fr 36px;gap:8px;padding:3px 2px;border-bottom:1px solid oklch(26% 0.006 264)}
+  #logs{font:11.5px var(--mono);background:oklch(14% 0.006 264);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:8px;height:260px;overflow:auto}
+  #logs .ln{display:grid;grid-template-columns:142px 64px 1fr 40px;gap:8px;padding:3px 2px;border-bottom:1px solid oklch(26% 0.006 264)}
   #logs .ln:last-child{border-bottom:0}
-  #logs .st_2{color:var(--ok)}#logs .st_4,#logs .st_5{color:var(--err)}
-  #logs .t,#logs .st,#logs .n{font-feature-settings:var(--tnum)}
+  #logs .st_2{color:var(--ok)}#logs .st_4,#logs .st_5{color:var(--err)}#logs .st_3{color:var(--warn)}
+  #logs .t,#logs .n{font-feature-settings:var(--tnum)}
 
   /* key pool */
-  #keys{font:12px var(--mono);background:oklch(14% 0.006 264);border:1px solid var(--line);border-radius:var(--r-ctrl);max-height:300px;overflow:auto}
+  #keys{font:12px var(--mono);background:oklch(14% 0.006 264);border:1px solid var(--line);border-radius:var(--r-ctrl);max-height:320px;overflow:auto}
   #keys table{border-collapse:collapse;width:100%}
   #keys td,#keys th{text-align:left;padding:8px 12px;white-space:nowrap}
   #keys tbody tr{border-top:1px solid oklch(26% 0.006 264)}
@@ -132,142 +154,201 @@
   #keys .keycell{color:var(--ink-2)}
   .st{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-family:var(--mono);font-feature-settings:var(--tnum)}
   .st::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ink-4);flex:none}
-  .st.cur{color:var(--accent)} .st.cur::before{background:var(--accent)}
-  .st.bad{color:var(--err)} .st.bad::before{background:var(--err)}
-  .st.lim{color:var(--warn)} .st.lim::before{background:var(--warn)}
-  .st.ok{color:var(--ok)} .st.ok::before{background:var(--ok)}
+  .st.cur{color:var(--accent)}.st.cur::before{background:var(--accent)}
+  .st.bad{color:var(--err)}.st.bad::before{background:var(--err)}
+  .st.lim{color:var(--warn)}.st.lim::before{background:var(--warn)}
+  .st.ok{color:var(--ok)}.st.ok::before{background:var(--ok)}
   .st.idle{color:var(--ink-4)}
   .del{font:600 11px var(--sans);background:transparent;color:var(--err);border:1px solid oklch(68% 0.18 22 / 26%);border-radius:6px;padding:2px 10px;cursor:pointer;transition:background .12s}
   .del:hover{background:oklch(68% 0.18 22 / 12%)}
-
   .empty{padding:22px;text-align:center;color:var(--ink-4);font-size:13px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11.5px;color:var(--ink-3)}.legend .st{font-size:11px}
 
   details.card{padding:0}
-  details.card>summary{list-style:none;cursor:pointer;padding:16px 18px;display:flex;align-items:center;gap:10px;font-weight:650;color:var(--ink);border-radius:var(--r-card);font-size:14px}
+  details.card>summary{list-style:none;cursor:pointer;padding:18px 20px;display:flex;align-items:center;gap:10px;font-weight:650;color:var(--ink);border-radius:var(--r-card);font-size:14px}
   details.card>summary::-webkit-details-marker{display:none}
   details.card>summary .chev{transition:transform .2s;color:var(--ink-4);font-size:12px}
   details.card[open]>summary .chev{transform:rotate(90deg)}
-  .docs-body{padding:0 18px 18px}
+  .docs-body{padding:0 20px 20px}
+  .docs-body h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin:18px 0 8px;font-weight:650}
+  .docs-body h3:first-child{margin-top:4px}
   pre.code{background:oklch(14% 0.006 264);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:12px;font:12px var(--mono);color:var(--ink-2);overflow:auto;margin:8px 0}
-  pre.code .k{color:var(--accent)}pre.code .c{color:var(--ink-4)}
-  .docs-body h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin:16px 0 6px;font-weight:650}
-  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11.5px;color:var(--ink-3)}
-  .legend .st{font-size:11px}
+  pre.code .k{color:var(--accent)}pre.code .c{color:var(--ink-4)}pre.code .s{color:oklch(82% 0.10 70)}
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:7px 16px;font-size:13px;align-items:baseline}
+  .kv dt{color:var(--ink-3);font-family:var(--mono);font-size:11.5px}
+  .kv dd{margin:0;font-family:var(--mono);font-size:12.5px;word-break:break-all;color:var(--ink-2)}
+  .toast{font-size:12.5px;color:var(--ink-3);margin-top:8px}
 </style>
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="mark"></span> freemodel-cc-proxy</div>
-  <span class="dot ok" id="pulse" title="здоровье"></span>
+  <div class="brand"><span class="mark"></span><div>freemodel-cc-proxy<div class="sub">локальный LLM-шлюз</div></div></div>
+  <span class="dot ok" id="pulse"></span>
   <span class="badge" id="badge">проверка…</span>
   <span class="ver" id="ver"></span>
+  <div class="spacer"></div>
+  <div class="toggle" id="profileToggle" role="switch" aria-checked="true" tabindex="0">
+    <span class="lbl" id="profileLbl">FreeModel</span>
+    <span class="track"><span class="knob"></span></span>
+    <span class="state" id="profileState">ON</span>
+  </div>
 </header>
 
 <main>
+  <!-- PROFILE + BACKEND LOGIC -->
+  <section class="card" id="profileCard">
+    <h2>Профиль провайдера</h2>
+    <p class="lead" id="profileName">FreeModel</p>
+    <p class="sub" id="profileNote">—</p>
+    <div class="route" style="margin-top:8px">
+      <div class="row">
+        <div class="node"><span class="t">Клиент → прокси</span><span class="d">любой OpenAI/Anthropic-клиент<br><code id="docBase">http://127.0.0.1:11440</code></span></div>
+        <div class="arr">→</div>
+        <div class="node"><span class="t">Выбор протокола</span><span class="d"><span class="pill muted">POST /v1/chat/completions</span> <span class="pill muted">POST /v1/messages</span></span></div>
+      </div>
+      <div class="row"><div class="arr v" style="margin-left:6px">↓</div></div>
+      <div class="row">
+        <div class="node"><span class="t">Роутинг по model id</span><span class="d"><span class="pill claude">claude-*</span> → fingerprint + cc-хост &nbsp; <span class="pill gpt">gpt-*</span> → api-хост напрямую</span></div>
+      </div>
+      <div class="row"><div class="arr v" style="margin-left:6px">↓</div></div>
+      <div class="branch">
+        <div class="node claude"><span class="t">Claude family <span class="pill claude">claude-*</span></span><span class="d">inject fingerprint (system blocks + metadata + UA) → <strong>cc.freemodel.dev</strong> → real Claude</span></div>
+        <div class="node gpt"><span class="t">GPT family <span class="pill gpt">gpt-*</span></span><span class="d">прямой OpenAI Chat Completions → <strong>api.freemodel.dev</strong> → GPT-5.x (без fingerprint)</span></div>
+      </div>
+    </div>
+    <p class="hint">Один пул <code>fe_oa_</code>-ключей, ротация на 401/402/429/5xx. Авторизация на клиенте необязательна — прокси подставляет ключ из пула.</p>
+  </section>
+
+  <!-- METRICS -->
   <section class="metrics">
     <div class="metric"><div class="k">Статус</div><div class="v" id="mStatus">—</div><div class="s" id="mUp">—</div></div>
-    <div class="metric"><div class="k">Ключей</div><div class="v" id="mKeys">—</div><div class="s" id="mKeyActive">—</div></div>
+    <div class="metric"><div class="k">Ключей в пуле</div><div class="v" id="mKeys">—</div><div class="s" id="mKeyActive">—</div></div>
     <div class="metric"><div class="k">Активный ключ</div><div class="v sm" id="mActive">—</div><div class="s" id="mActiveReq">—</div></div>
-    <div class="metric"><div class="k">Запросов</div><div class="v" id="mReq">—</div><div class="s" id="mReqLast">последний статус</div></div>
+    <div class="metric"><div class="k">Запросов (в логе)</div><div class="v" id="mReq">—</div><div class="s" id="mReqLast">—</div></div>
   </section>
 
+  <!-- MODELS -->
   <section class="card">
-    <h2>Эндпоинты</h2>
-    <dl class="kv" id="status"><dt>…</dt><dd></dd></dl>
-    <p class="hint">Используй этот адрес как базовый для любого Anthropic- или OpenAI-совместимого клиента. Заголовок авторизации необязателен — прокси подставляет реальный ключ из пула.</p>
-  </section>
-
-  <section class="card">
-    <h2>Пул ключей</h2>
-    <div class="sub">последовательный слив (#1 → #2 → …), авто-ротация на 401 / 402 / 429 / 5xx</div>
-    <div id="keys"><div class="empty">загрузка…</div></div>
-    <div class="legend">
-      <span class="st cur">активен</span>
-      <span class="st bad">битый (401)</span>
-      <span class="st lim">лимит</span>
-      <span class="st ok">ok</span>
-      <span class="st idle">простаивает</span>
+    <h2>Модели (объединённый список)</h2>
+    <div class="sub">GET /v1/models мержит оба хоста FreeModel</div>
+    <div class="modelgroup">
+      <div class="gh"><span class="pill claude">claude-*</span> cc.freemodel.dev</div>
+      <ul class="models" id="modelsClaude"><li class="muted">…</li></ul>
     </div>
-    <label for="addkey">Добавить ключи (fe_oa_…) — один или много, через пробел/перенос</label>
-    <textarea id="addkey" placeholder="fe_oa_…&#10;fe_oa_…"></textarea>
-    <div class="row" style="margin-top:6px">
-      <button class="btn" id="addBtn">Добавить ключи</button>
-      <button class="btn ghost" id="findBtn">Найти рабочий</button>
+    <div class="modelgroup" style="margin-bottom:0">
+      <div class="gh"><span class="pill gpt">gpt-*</span> api.freemodel.dev</div>
+      <ul class="models" id="modelsGpt"><li class="muted">…</li></ul>
     </div>
-    <span id="addMsg" class="hint" style="margin-left:2px;margin-top:8px"></span>
-  </section>
-
-  <section class="card">
-    <h2>Профиль fingerprint (имитация клиента)</h2>
-    <div class="sub">значения, которые прокси подставляет, чтобы пройти гейт cc.freemodel.dev. Хранятся в файле — обновляются без правки кода (после апдейта Claude Code просто перезахвати через mitmproxy и вставь сюда)</div>
-    <dl class="kv" id="fp"><dt>…</dt><dd></dd></dl>
-    <label for="fpUA">User-Agent</label>
-    <input id="fpUA" placeholder="claude-cli/… (external, sdk-cli)">
-    <label for="fpBeta">anthropic-beta</label>
-    <input id="fpBeta">
-    <label for="fpBill">billing-header (первый system-блок)</label>
-    <input id="fpBill">
-    <label for="fpAgent">agent-header (второй system-блок)</label>
-    <input id="fpAgent">
-    <div class="row" style="margin-top:6px"><button class="btn" id="fpSave">Сохранить и применить</button><button class="btn ghost" id="fpReload">Перечитать</button></div>
-    <span id="fpMsg" class="hint" style="margin-top:8px"></span>
   </section>
 
   <div class="grid">
+    <!-- TEST -->
     <section class="card">
-      <h2>Тест</h2>
+      <h2>Тестовый запрос</h2>
+      <div class="sub">проходить реальным путём бэкенда</div>
+      <label>Протокол</label>
       <div class="seg" role="tablist" aria-label="протокол">
         <button id="protoOpenai" aria-pressed="true">OpenAI</button>
         <button id="protoAnthropic" aria-pressed="false">Anthropic</button>
       </div>
-      <ul class="models" id="models" style="margin-top:14px"><li class="muted">загрузка…</li></ul>
-      <label for="model">Модель</label>
+      <label for="model">Модель <span class="faint" id="modelHint">(по протоколу)</span></label>
       <select id="model"></select>
       <label for="prompt">Запрос</label>
       <textarea id="prompt">Ответь ровно одним словом: ok</textarea>
-      <div class="row"><button class="btn" id="run">Отправить</button><button class="btn ghost" id="refresh">Обновить</button></div>
+      <div class="row" style="margin-top:6px"><button class="btn" id="run">Отправить</button><button class="btn ghost" id="refresh">Обновить</button></div>
       <div id="testOut"></div>
     </section>
 
+    <!-- LOGS -->
     <section class="card">
-      <h2>Последние запросы</h2>
+      <h2>Лог запросов</h2>
+      <div class="sub">последние события бэкенда</div>
       <div id="logs"><div class="empty">запросов пока нет</div></div>
       <button class="btn ghost" id="refLogs" style="margin-top:12px">Обновить лог</button>
     </section>
   </div>
 
+  <!-- KEY POOL -->
+  <section class="card">
+    <h2>Пул ключей</h2>
+    <div class="sub">последовательный слив (#1 → #2 → …), авто-ротация на 401 / 402 / 429 / 5xx</div>
+    <div id="keys"><div class="empty">загрузка…</div></div>
+    <div class="legend">
+      <span class="st cur">активен</span><span class="st bad">битый (401)</span><span class="st lim">лимит</span><span class="st ok">ok</span><span class="st idle">простаивает</span>
+    </div>
+    <label for="addkey">Добавить ключи (fe_oa_…) — один или много, через пробел/перенос</label>
+    <textarea id="addkey" placeholder="fe_oa_…&#10;fe_oa_…"></textarea>
+    <div class="row" style="margin-top:6px"><button class="btn" id="addBtn">Добавить</button><button class="btn ghost" id="findBtn">Найти рабочий</button></div>
+    <span class="toast" id="addMsg"></span>
+  </section>
+
+  <!-- FINGERPRINT -->
+  <section class="card">
+    <h2>Профиль fingerprint (имитация Claude Code)</h2>
+    <div class="sub">значения для прохождения гейта cc.freemodel.dev · хранятся в файле, обновляются без правки кода</div>
+    <dl class="kv" id="fp"><dt>…</dt><dd></dd></dl>
+    <label for="fpUA">User-Agent</label><input id="fpUA" placeholder="claude-cli/… (external, sdk-cli)">
+    <label for="fpBeta">anthropic-beta</label><input id="fpBeta">
+    <label for="fpBill">billing-header (первый system-блок)</label><input id="fpBill">
+    <label for="fpAgent">agent-header (второй system-блок)</label><input id="fpAgent">
+    <div class="row" style="margin-top:6px"><button class="btn" id="fpSave">Сохранить и применить</button><button class="btn ghost" id="fpReload">Перечитать</button></div>
+    <span class="toast" id="fpMsg"></span>
+  </section>
+
+  <!-- DOCS -->
   <details class="card">
-    <summary><span class="chev">▸</span> Документация для агентов и автоматизации</summary>
+    <summary><span class="chev">▸</span> Документация: эндпоинты, ключи, клиенты</summary>
     <div class="docs-body">
-      <p class="hint">Базовый URL <code id="docBase">http://127.0.0.1:11440</code> · авторизация необязательна (любое значение; прокси подставляет реальный ключ из пула).</p>
+      <h3>Эндпоинты прокси</h3>
+      <dl class="kv">
+        <dt>Базовый URL</dt><dd><code id="docBase2">http://127.0.0.1:11440</code></dd>
+        <dt>Anthropic</dt><dd><code>POST /v1/messages</code> — claude-* → cc, gpt-* → api (перевод Anthropic→OpenAI)</dd>
+        <dt>OpenAI</dt><dd><code>POST /v1/chat/completions</code> — gpt-* → api напрямую, claude-* → cc (перевод OpenAI→Anthropic)</dd>
+        <dt>Модели</dt><dd><code>GET /v1/models</code> — объединённый список Claude + GPT</dd>
+        <dt>Авторизация</dt><dd>необязательна (любое значение; прокси подставляет реальный ключ из пула)</dd>
+      </dl>
       <h3>Управление пулом ключей</h3>
 <pre class="code"><span class="c"># список ключей (маскированы, со статусом и счётчиками)</span>
 <span class="k">GET</span> /api/keys
-→ { "total":2, "current":0, "keys":[{ "index":0, "masked":"fe_oa_1e…a242", "current":true, "ok":3, "limited":0, "bad":false, "count":3, "lastStatus":200, "lastUsed":"…" }] }
+→ { "total":2, "current":0, "keys":[{ "index":0, "masked":"fe_oa_1e…a242", "current":true, "ok":3, "bad":false, "count":3, "lastStatus":200 }] }
 
 <span class="c"># добавить один или несколько (персистится, дубликаты игнорируются)</span>
 <span class="k">POST</span> /api/keys        { "keys":["fe_oa_…","fe_oa_…"] }
-→ { "ok":true, "added":2, "total":4 }
 
-<span class="c"># удалить по индексу (из GET) или по точному ключу</span>
-<span class="k">DELETE</span> /api/keys     { "index":0 }     <span class="c"># или  { "key":"fe_oa_…" }</span>
+<span class="c"># удалить по индексу или по точному ключу</span>
+<span class="k">DELETE</span> /api/keys     { "index":0 }   <span class="c"># или { "key":"fe_oa_…" }</span>
 
-<span class="c"># проб по порядку, залочиться на ПЕРВОМ рабочем (минимум запросов)</span>
-<span class="k">POST</span> /api/keys/find   {}
-→ { "ok":true, "current":1, "masked":"fe_oa_9b…1d39", "probed":2, "tried":[…] }</pre>
-      <h3>Чат — настоящий Claude</h3>
-<pre class="code"><span class="c"># OpenAI Chat Completions (stream + non-stream, tools/function-calling)</span>
-<span class="k">POST</span> /v1/chat/completions   { "model":"claude-opus-4-8","messages":[…],"stream":false }
+<span class="c"># проб по порядку, залочиться на первом рабочем</span>
+<span class="k">POST</span> /api/keys/find   {}</pre>
+      <h3>Профиль (вкл/выкл)</h3>
+<pre class="code"><span class="k">GET</span>  /api/profile
+<span class="k">PUT</span>  /api/profile    { "enabled": false }   <span class="c"># отключить: /v1/* → 503, UI и /api/* остаются</span></pre>
+      <h3>Fingerprint</h3>
+<pre class="code"><span class="k">GET</span> /api/fingerprint
+<span class="k">PUT</span> /api/fingerprint   { "userAgent":"…", "anthropicBeta":"…", "billingHeader":"…", "agentHeader":"…" }</pre>
+      <h3>Клиенты — подключение</h3>
+<pre class="code"><span class="c"># Factory Droid (~/.factory/settings.json customModels, + FACTORY_AIRGAP_ENABLED=1)</span>
+{ "model":"claude-opus-4-8", "baseUrl":"http://127.0.0.1:11440", "apiKey":"dummy",
+  "provider":"anthropic", "maxOutputTokens":16384 }
 
-<span class="c"># Anthropic Messages (stream + non-stream, tools/tool_use)</span>
-<span class="k">POST</span> /v1/messages            { "model":"claude-opus-4-8","max_tokens":1024,… }
+<span class="c"># Claude Code</span>
+export ANTHROPIC_BASE_URL=http://127.0.0.1:11440
+export ANTHROPIC_API_KEY=dummy
+claude "…"
 
-<span class="k">GET</span>  /v1/models</pre>
-      <h3>curl — добавить ключ из скрипта</h3>
-<pre class="code">curl -X POST http://127.0.0.1:11440/api/keys \
-  -H 'content-type: application/json' -d '{"keys":["fe_oa_…"]}'
-<span class="c"># или встроенная CLI:  node keys.js add fe_oa_…</span></pre>
-      <p class="hint">Модели: <code>claude-opus-4-8</code> · <code>claude-sonnet-4-6</code> · <code>claude-opus-4-7</code> · <code>claude-opus-4-6</code> · <code>claude-haiku-4-5-20251001</code> · <code>claude-fable-5</code></p>
+<span class="c"># Pi CLI (~/.pi/agent/models.json)</span>
+{ "providers":{ "freemodel":{ "baseUrl":"http://127.0.0.1:11440",
+  "api":"anthropic-messages", "apiKey":"dummy",
+  "models":[{ "id":"claude-opus-4-8", "reasoning":true, "input":["text","image"] }] } } }
+
+<span class="c"># OpenAI SDK / Cursor / Cline (OpenAI-протокол, любая модель)</span>
+base_url=http://127.0.0.1:11440/v1  api_key=dummy  model=gpt-5.4-mini <span class="c"># или claude-opus-4-8</span></pre>
+      <h3>CLI ключей</h3>
+<pre class="code">node keys.js add fe_oa_…      <span class="c"># добавить</span>
+node keys.js                   <span class="c"># список</span>
+node keys.js rm 0              <span class="c"># удалить по индексу</span>
+node keys.js status            <span class="c"># сводка</span></pre>
+      <p class="hint">Модели Claude: <code>claude-opus-4-8</code> · <code>claude-sonnet-4-6</code> · <code>claude-opus-4-7</code> · <code>claude-opus-4-6</code> · <code>claude-haiku-4-5-20251001</code> · <code>claude-fable-5</code>. GPT: <code>gpt-5.5</code> · <code>gpt-5.4</code> · <code>gpt-5.4-mini</code> · <code>gpt-5.3-codex</code>.</p>
     </div>
   </details>
 </main>
@@ -275,6 +356,9 @@
 <script>
 const $ = (s) => document.querySelector(s);
 let proto = "openai";
+let ALL_MODELS = [];
+const isClaude = (id) => /^claude/i.test(id || "");
+const isGpt = (id) => /^gpt-/i.test(id || "") || /gpt-5/i.test(id || "");
 async function json(u, o){ const r = await fetch(u, o); return [r.status, await r.json().catch(() => ({}))]; }
 const tnum = (n) => (n == null ? "—" : Number(n).toLocaleString("ru-RU"));
 
@@ -282,78 +366,69 @@ async function status(){
   const [s, d] = await json('/api/status');
   const badge = $('#badge'), pulse = $('#pulse');
   if (s === 200 && d.ok){
-    badge.textContent = 'работает'; badge.classList.remove('err');
-    pulse.classList.remove('err'); pulse.classList.add('ok');
-    $('#mStatus').textContent = 'жив'; $('#mUp').textContent = ('работает ' + d.uptime_s + 's');
+    pulse.classList.remove('err','off'); pulse.classList.add('ok');
+    badge.classList.remove('err','off'); badge.textContent = 'работает';
+    $('#mStatus').textContent = 'жив'; $('#mUp').textContent = ('uptime ' + d.uptime_s + 's');
     $('#ver').textContent = 'v' + (d.version || '');
-    const db = $('#docBase'); if (db) db.textContent = location.origin;
-    const kv = $('#status'); kv.innerHTML = '';
-    [['Базовый URL', location.origin],
-     ['Anthropic', location.origin + '/v1/messages'],
-     ['OpenAI', location.origin + '/v1/chat/completions'],
-     ['upstream', 'https://' + d.upstream + '/v1/messages?beta=true']
-    ].forEach(([k, v]) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; kv.append(dt, dd); });
-    $('#mKeys').textContent = tnum(d.keys.total);
-    $('#mKeyActive').textContent = 'текущий #' + d.keys.current;
+    $('#mKeys').textContent = tnum(d.keys.total); $('#mKeyActive').textContent = 'текущий #' + d.keys.current;
     $('#mActive').textContent = d.keys.currentMasked;
+    for (const id of ['docBase','docBase2']) if ($(id)) $(id).textContent = location.origin;
+    applyProfile(d.profile || {});
   } else {
-    badge.textContent = 'недоступен'; badge.classList.add('err');
     pulse.classList.remove('ok'); pulse.classList.add('err');
-    $('#mStatus').textContent = '—';
+    badge.classList.add('err'); badge.textContent = 'недоступен'; $('#mStatus').textContent = '—';
   }
 }
-let ALL_MODELS = [];
-function isClaude(id){ return /^claude/i.test(id || ""); }
-function isGpt(id){ return /^gpt-/i.test(id || "") || /gpt-5/i.test(id || ""); }
+async function loadProfile(){
+  const [s, d] = await json('/api/profile'); if (s === 200) applyProfile(d);
+}
+function applyProfile(p){
+  if (!p) return;
+  const tg = $('#profileToggle');
+  tg.setAttribute('aria-checked', String(!!p.enabled));
+  $('#profileState').textContent = p.enabled ? 'ON' : 'OFF';
+  $('#profileLbl').textContent = p.name || 'FreeModel';
+  $('#profileName').textContent = p.name || 'FreeModel';
+  if (p.note) $('#profileNote').textContent = p.note;
+  $('#run').disabled = !p.enabled;
+}
+$('#profileToggle').addEventListener('click', async () => {
+  const cur = $('#profileToggle').getAttribute('aria-checked') === 'true';
+  const [s, d] = await json('/api/profile', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: !cur }) });
+  if (s === 200) applyProfile(d.profile);
+});
+$('#profileToggle').addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); $('#profileToggle').click(); } });
+
 async function models(){
   const [s, d] = await json('/v1/models');
   ALL_MODELS = (d.data || []).map((m) => m.id);
-  // chips: all models, grouped visually (Claude first, GPT after)
-  const ul = $('#models'); ul.innerHTML = '';
-  ALL_MODELS.forEach((id) => {
-    const li = document.createElement('li');
-    li.textContent = id;
-    li.className = isClaude(id) ? 'm-claude' : (isGpt(id) ? 'm-gpt' : '');
-    ul.append(li);
-  });
+  const cl = $('#modelsClaude'), gp = $('#modelsGpt');
+  cl.innerHTML = ''; gp.innerHTML = '';
+  const claudeIds = ALL_MODELS.filter(isClaude), gptIds = ALL_MODELS.filter(isGpt);
+  claudeIds.forEach((id) => { const li = document.createElement('li'); li.className = 'claude'; li.textContent = id; cl.append(li); });
+  gptIds.forEach((id) => { const li = document.createElement('li'); li.className = 'gpt'; li.textContent = id; gp.append(li); });
   renderModelSelect();
 }
 function renderModelSelect(){
-  const sel = $('#model'); const prev = sel.value;
-  sel.innerHTML = '';
-  // In OpenAI segment show GPT models (the native OpenAI host family);
-  // in Anthropic segment show Claude models (the native Anthropic family).
-  // Cross-family still works on the wire (proxy translates), but the picker
-  // defaults to the family that matches the chosen protocol.
+  const sel = $('#model'); const prev = sel.value; sel.innerHTML = '';
   const want = proto === 'anthropic' ? 'claude' : 'gpt';
   const list = ALL_MODELS.filter((id) => want === 'claude' ? isClaude(id) : isGpt(id));
   list.forEach((id) => { const o = document.createElement('option'); o.value = id; o.textContent = id; sel.append(o); });
   if (prev && list.includes(prev)) sel.value = prev;
+  $('#modelHint').textContent = list.length ? '(' + list.length + ')' : '(нет моделей)';
 }
+
 async function test(){
-  const out = $('#testOut'); out.textContent = '…';
+  const out = $('#testOut');
+  if (!$('#model').value){ out.innerHTML = '<span class="err">нет моделей для этого протокола</span>'; return; }
+  out.textContent = '…';
   const [s, d] = await json('/api/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: $('#model').value, prompt: $('#prompt').value, proto }) });
-  if (d.ok){ out.textContent = 'HTTP ' + s + ' · ' + d.model + ' · ' + (d.proto || '?') + ' → ' + (d.path || '') + (d.upstream ? '\nupstream: ' + d.upstream : '') + '\n\n' + d.raw; }
-  else { out.textContent = 'HTTP ' + (d.status || s) + ' · ' + (d.proto || '') + ' → ' + (d.path || '') + '\n\n' + (d.raw || d.error || JSON.stringify(d)); }
+  const head = (d.proto || '?') + ' → ' + (d.path || '') + (d.upstream ? ' · upstream: ' + d.upstream : '') + ' · HTTP ' + (d.status || s);
+  if (d.ok) out.innerHTML = '<div class="meta">' + head + '</div><div class="ok">' + d.raw + '</div>';
+  else out.innerHTML = '<div class="meta">' + head + '</div><div class="err">' + (d.raw || d.error || JSON.stringify(d)) + '</div>';
   refreshLogs();
 }
-async function loadFp(){
-  const [s, d] = await json('/api/fingerprint'); if (s !== 200) return;
-  const kv = $('#fp'); kv.innerHTML = '';
-  [['файл профиля', d.profileFile], ['захвачено с', d.capturedFrom]].forEach(([k,v]) => {
-    const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v || '—'; kv.append(dt, dd);
-  });
-  $('#fpUA').value = d.userAgent || '';
-  $('#fpBeta').value = d.anthropicBeta || '';
-  $('#fpBill').value = d.billingHeader || '';
-  $('#fpAgent').value = d.agentHeader || '';
-}
-async function saveFp(){
-  const body = { userAgent: $('#fpUA').value.trim(), anthropicBeta: $('#fpBeta').value.trim(), billingHeader: $('#fpBill').value.trim(), agentHeader: $('#fpAgent').value.trim() };
-  const [s, d] = await json('/api/fingerprint', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  const m = $('#fpMsg'); m.textContent = (s === 200) ? 'применено: ' + (d.profile && d.profile.capturedFrom || 'ok') : ('ошибка: ' + JSON.stringify(d));
-  setTimeout(() => { m.textContent = ''; }, 3500);
-}
+
 async function refreshKeys(){
   const [s, d] = await json('/api/keys'); if (s !== 200) return;
   const el = $('#keys');
@@ -370,8 +445,7 @@ async function refreshKeys(){
     else st = '<span class="st idle">простой</span>';
     h += '<tr class="' + (k.current ? 'cur' : '') + '"><td class="star">' + (k.current ? '★' : '·') + '</td><td class="idx">' + k.index + '</td><td class="keycell">' + k.masked + '</td><td>' + st + '</td><td class="n">' + (k.lastStatus || '—') + '</td><td class="n">' + tnum(k.count) + '</td><td><button class="del" data-i="' + k.index + '">rm</button></td></tr>';
   }
-  h += '</tbody></table>';
-  el.innerHTML = h;
+  h += '</tbody></table>'; el.innerHTML = h;
   el.querySelectorAll('.del').forEach((b) => b.onclick = async () => { await json('/api/keys', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ index: parseInt(b.dataset.i, 10) }) }); refreshKeys(); });
 }
 async function addKeys(){
@@ -380,23 +454,21 @@ async function addKeys(){
   const [s, d] = await json('/api/keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ keys }) });
   const m = $('#addMsg'); m.textContent = (s === 200) ? ('добавлено ' + d.added + ', всего ' + d.total) : ('ошибка: ' + JSON.stringify(d));
   if (s === 200) ta.value = '';
-  setTimeout(() => { m.textContent = ''; }, 3000);
-  refreshKeys();
+  setTimeout(() => { m.textContent = ''; }, 3000); refreshKeys();
 }
 async function findWorking(){
   const m = $('#addMsg'); m.textContent = 'пробую…';
   const [s, d] = await json('/api/keys/find', { method: 'POST' });
-  if (d.ok){ m.textContent = 'залочен на #' + d.current + ' ' + d.masked + ' (' + d.probed + ' проб)'; }
-  else { m.textContent = 'рабочих ключей нет (' + (d.probed || 0) + ' проб)'; }
-  setTimeout(() => { m.textContent = ''; }, 4000);
-  refreshKeys();
+  if (d.ok) m.textContent = 'залочен на #' + d.current + ' ' + d.masked + ' (' + d.probed + ' проб)';
+  else m.textContent = 'рабочих ключей нет (' + (d.probed || 0) + ' проб)';
+  setTimeout(() => { m.textContent = ''; }, 4000); refreshKeys();
 }
 async function refreshLogs(){
   const [s, d] = await json('/api/logs'); if (s !== 200) return;
   const el = $('#logs'); el.innerHTML = '';
   const logs = d.logs || [];
   $('#mReq').textContent = tnum(logs.length);
-  if (logs[0]){ $('#mReqLast').textContent = ('last = ' + (logs[0].status || '—')); }
+  if (logs[0]) $('#mReqLast').textContent = ('last = ' + (logs[0].status || '—'));
   logs.slice(0, 80).forEach((l) => {
     const ln = document.createElement('div'); ln.className = 'ln';
     const st = (l.status || '').toString();
@@ -405,6 +477,22 @@ async function refreshLogs(){
   });
   if (!el.children.length){ const sp = document.createElement('div'); sp.className = 'empty'; sp.textContent = 'запросов пока нет'; el.append(sp); }
 }
+async function loadFp(){
+  const [s, d] = await json('/api/fingerprint'); if (s !== 200) return;
+  const kv = $('#fp'); kv.innerHTML = '';
+  [['файл профиля', d.profileFile], ['захвачено с', d.capturedFrom]].forEach(([k, v]) => {
+    const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v || '—'; kv.append(dt, dd);
+  });
+  $('#fpUA').value = d.userAgent || ''; $('#fpBeta').value = d.anthropicBeta || '';
+  $('#fpBill').value = d.billingHeader || ''; $('#fpAgent').value = d.agentHeader || '';
+}
+async function saveFp(){
+  const body = { userAgent: $('#fpUA').value.trim(), anthropicBeta: $('#fpBeta').value.trim(), billingHeader: $('#fpBill').value.trim(), agentHeader: $('#fpAgent').value.trim() };
+  const [s, d] = await json('/api/fingerprint', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const m = $('#fpMsg'); m.textContent = (s === 200) ? 'применено' : ('ошибка: ' + JSON.stringify(d));
+  setTimeout(() => { m.textContent = ''; }, 3500);
+}
+
 function setProto(p){
   proto = p;
   $('#protoOpenai').setAttribute('aria-pressed', String(p === 'openai'));
@@ -420,7 +508,7 @@ $('#addBtn').onclick = addKeys;
 $('#findBtn').onclick = findWorking;
 $('#fpSave').onclick = saveFp;
 $('#fpReload').onclick = loadFp;
-status(); models(); refreshLogs(); refreshKeys(); loadFp();
+status(); models(); refreshLogs(); refreshKeys(); loadFp(); loadProfile();
 setInterval(() => { refreshLogs(); refreshKeys(); }, 4000);
 </script>
 </body>

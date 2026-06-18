@@ -104,6 +104,42 @@ Line-height 1.5 for body, 1.25 for large numbers.
 - **Input** — `--panel-2`, `--line`, focus = accent ring (`box-shadow: 0 0 0 3px --accent-soft`).
 - **Segmented control** — pill of buttons in `--panel-2`; selected = `--panel-3` + shadow.
 - **Code block** — `oklch(14% ...)` inset, mono, keywords `--accent`, comments `--ink-4`.
+- **Toggle (profile enable)** — 42×24 pill track + 18px knob; off = `--panel-2`/`--ink-3`,
+  on = `--accent-soft` track + `--accent` knob translated 18px. Keyboard-accessible
+  (`role=switch`, Space/Enter). Sits in the header so the profile state is always visible.
+- **Routing diagram** — the "backend logic" card. A vertical flow of `--panel-2` nodes
+  connected by `→`/`↓` arrows: client → protocol choice → model-id routing → two
+  family-colored branches (`--claude` warm / `--gpt` blue) ending at their upstream.
+  Family `pill` tags reuse the family colors. This is the single source of truth for
+  what the proxy does, drawn so a reader gets it in 3 seconds.
+- **Family pills** — small mono pills: `.pill.claude` (warm border+text on
+  `--claude-soft`), `.pill.gpt` (blue), `.pill.muted` (neutral). Used in the diagram,
+  model groups, and model-id routing row.
+
+## Two-family color extension
+
+The console fronts **two** model families, so the single-accent rule gets one
+exception: a second, blue signal for the GPT family, used only as a family tag
+(border + small text + soft tint), never as a large fill or a primary action.
+
+```css
+--claude:      oklch(76% 0.13 70);   /* warm — Claude family (same hue as accent) */
+--claude-soft: oklch(76% 0.13 70 / 12%);
+--gpt:         oklch(72% 0.10 240);  /* blue — GPT family */
+--gpt-soft:    oklch(72% 0.10 240 / 12%);
+```
+
+Amber stays the accent (active key, primary button, profile ON). Blue is a
+**family label only**, not a second accent — it never appears on buttons or the
+active state.
+
+## Profile concept
+
+FreeModel is a **profile**: a named, toggleable provider configuration (id, name,
+enabled, note, upstreams). The header carries an ON/OFF toggle that PUTs
+`/api/profile { enabled }`. When off, `/v1/*` returns `503 profile_disabled`
+with a clear message; the UI and `/api/*` stay up so you can re-enable. The
+profile card shows the routing diagram (above) so the toggle's effect is obvious.
 
 ## Localization
 

@@ -1,34 +1,53 @@
 # freemodel-cc-proxy
 
-Local **Claude proxy** over FreeModel's `cc.freemodel.dev` — gives any client access
-to **real Claude Opus 4.8, Sonnet 4.6, Haiku 4.5** through one local endpoint, using
-your existing FreeModel key. Speaks **both** protocols:
+Local **LLM gateway** over FreeModel — one endpoint, **both** model families, both
+protocols, using your existing FreeModel `fe_oa` key:
+
+- **Real Claude** (Opus 4.8, Sonnet 4.6, Haiku 4.5) from `cc.freemodel.dev`
+- **GPT-5.x** (gpt-5.5/5.4/5.4-mini/5.3-codex) from `api.freemodel.dev`
+
+Speaks **both** wire protocols on the same port:
 
 - **Anthropic Messages API** (`POST /v1/messages`)
-- **OpenAI Chat Completions API** (`POST /v1/chat/completions`) — translated OpenAI⇄Anthropic
+- **OpenAI Chat Completions API** (`POST /v1/chat/completions`)
 
-…both **streaming and non-streaming**.
+…both **streaming and non-streaming**, with full tool/function-calling. The proxy
+routes by model id (`claude-*` → fingerprint + cc host, `gpt-*` → api host direct)
+and translates between protocols as needed, so any client works against any model.
 
 Works with **Factory `droid`** (BYOK, with `FACTORY_AIRGAP_ENABLED=1`), **Claude Code**,
-**Cline**, **Cursor**, the **Anthropic SDK**, the **OpenAI SDK**, and any tool that talks
-either API.
+**Cline**, **Cursor**, **Pi CLI**, the **Anthropic SDK**, the **OpenAI SDK**, and any
+tool that talks either API.
 
 > FreeModel exposes Claude only on `cc.freemodel.dev`, and that endpoint is gated to the
 > **official Claude Code client** — it returns `403 "This service is restricted to the
 > official Claude Code client"` for anything else. This proxy impersonates Claude Code's
-> request fingerprint (captured via mitmproxy) so ordinary clients get through. No
-> binary patching, no token theft — just request-shape normalization on your own
-> machine, with your own key.
+> request fingerprint (captured via mitmproxy) so ordinary clients get through. GPT
+> models on `api.freemodel.dev` have no such gate. No binary patching, no token theft —
+> just request-shape normalization on your own machine, with your own key.
+
+## Profile & enable toggle
+
+FreeModel is a **profile** — a named, toggleable provider config. The web UI has an
+ON/OFF switch in the header; `PUT /api/profile { "enabled": false }` does the same
+programmatically. When disabled, `/v1/*` returns `503 profile_disabled` with a clear
+message, while the UI and `/api/*` stay up so you can re-enable. State persists in
+`~/.freemodel-cc-proxy/profile.json`.
 
 ## What it does
 
-- `POST /v1/messages` — full Anthropic Messages API (**streaming SSE + non-streaming**),
-  with the Claude Code fingerprint injected before forwarding to `cc.freemodel.dev`.
-- `POST /v1/chat/completions` — full OpenAI Chat Completions API (**streaming +
-  non-streaming**, including tool/function calling). Requests are translated
-  OpenAI→Anthropic, responses back Anthropic→OpenAI.
-- `GET /v1/models` — lists the Claude models FreeModel actually serves (OpenAI-shape).
-- `GET /` — web UI: status, model list, **key pool**, live test panel, request log.
+- `POST /v1/messages` — Anthropic Messages API (**streaming SSE + non-streaming**).
+  `claude-*` → fingerprint inject → `cc.freemodel.dev`; `gpt-*` → translate to OpenAI →
+  `api.freemodel.dev` → translate back.
+- `POST /v1/chat/completions` — OpenAI Chat Completions API (**streaming + non-streaming**,
+  tool/function calling). `gpt-*` → forward as-is to `api.freemodel.dev`; `claude-*` →
+  translate to Anthropic + fingerprint → `cc.freemodel.dev` → translate back.
+- `GET /v1/models` — merged list of both families (6 Claude + 4 GPT, OpenAI-shape).
+- `GET /` — web UI: profile toggle + **routing diagram**, metrics, model list, **key
+  pool**, fingerprint editor, live test panel (protocol × model), request log, docs.
+- `GET/PUT /api/profile` — read/toggle the profile.
+- `GET/PUT /api/fingerprint` — read/update the Claude Code fingerprint profile.
+- `GET/POST/DELETE /api/keys`, `POST /api/keys/find` — manage the key pool.
 
 > The FreeModel gate forces `stream:true` on every upstream request. So even when a
 > client asks for a single JSON object (`stream:false`, the Anthropic SDK default, or
@@ -36,7 +55,9 @@ either API.
 > object** before returning it. Non-streaming clients work as if the upstream weren't
 > gated.
 
-## Available models (from `cc.freemodel.dev/v1/models`)
+## Available models (merged `/v1/models`)
+
+**Claude** — from `cc.freemodel.dev` (fingerprint-gated):
 
 | Model | Context |
 |---|---|
@@ -46,6 +67,12 @@ either API.
 | `claude-opus-4-6` | 200K |
 | `claude-fable-5` | — |
 | `claude-haiku-4-5-20251001` | 200K |
+
+**GPT** — from `api.freemodel.dev` (no gate):
+
+| Model |
+|---|
+| `gpt-5.5` · `gpt-5.4` · `gpt-5.4-mini` · `gpt-5.3-codex` |
 
 ## Requirements
 

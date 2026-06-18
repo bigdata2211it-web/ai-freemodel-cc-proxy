@@ -42,6 +42,29 @@ function loadConfig() {
 }
 const CFG = loadConfig();
 
+// ─── profile (the provider this proxy fronts, with an enable toggle) ──────
+// FreeModel is the profile. When disabled, the proxy still serves the UI and
+// /api/* but returns 503 on /v1/* so clients see a clean "profile disabled"
+// instead of upstream errors. State persists in profile.json.
+const PROFILE_FILE = path.join(CONFIG_DIR, "profile.json");
+function loadProfile() {
+  const p = {
+    id: "freemodel",
+    name: "FreeModel",
+    enabled: true,
+    claudeUpstream: CFG.upstream,
+    openaiUpstream: CFG.upstreamOpenai,
+    note: "Real Claude (cc.freemodel.dev) + GPT (api.freemodel.dev) via one fe_oa key pool.",
+  };
+  try { Object.assign(p, JSON.parse(fs.readFileSync(PROFILE_FILE, "utf8"))); } catch {}
+  if (process.env.FMCC_PROFILE_ENABLED === "0" || process.env.FMCC_PROFILE_ENABLED === "false") p.enabled = false;
+  return p;
+}
+let PROFILE = loadProfile();
+function persistProfile() {
+  try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(PROFILE_FILE, JSON.stringify(PROFILE, null, 2) + "\n"); } catch {}
+}
+
 // ─── key pool (multi-key rotation: drain key #1 until exhausted, then #2, …) ─
 // On 401/402/429/5xx the proxy advances to the next usable key and retries the
 // SAME client request, so the client sees no break — only a final error if every
@@ -864,12 +887,38 @@ const server = http.createServer((creq, cres) => {
     return;
   }
 
+  // Profile disabled → block LLM traffic (UI + /api/* still work so you can re-enable)
+  if (!PROFILE.enabled && url.startsWith("/v1/")) {
+    const buf = Buffer.from(JSON.stringify({
+      type: "error", error: { type: "profile_disabled",
+        message: "Profile '" + PROFILE.id + "' is disabled. Enable it in the proxy UI or PUT /api/profile { enabled: true }." }
+    }));
+    cres.writeHead(503, { "content-type": "application/json", "content-length": buf.length, "x-profile-enabled": "false" });
+    cres.end(buf);
+    return;
+  }
+
   // UI backend
+  if (url === "/api/profile") {
+    if (creq.method === "GET") { sendJson(cres, 200, { ...PROFILE, profileFile: PROFILE_FILE }); return; }
+    if (creq.method === "PUT") {
+      readJsonBody(creq, (body) => {
+        if (typeof body.enabled === "boolean") PROFILE.enabled = body.enabled;
+        if (typeof body.name === "string") PROFILE.name = body.name;
+        if (typeof body.note === "string") PROFILE.note = body.note;
+        persistProfile();
+        pushLog({ kind: "api", method: "PUT", path: "/api/profile", status: 200, note: "enabled=" + PROFILE.enabled });
+        sendJson(cres, 200, { ok: true, profile: { ...PROFILE, profileFile: PROFILE_FILE } });
+      });
+      return;
+    }
+  }
   if (url === "/api/status") {
     sendJson(cres, 200, {
       ok: true,
       port: CFG.port,
       upstream: CFG.upstream,
+      profile: { id: PROFILE.id, name: PROFILE.name, enabled: PROFILE.enabled },
       keys: { total: KEY_POOL.length, current: keyIdx, currentMasked: maskKey(currentKey()) },
       device_id: DEVICE_ID,
       session_id: SESSION_ID,
