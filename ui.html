@@ -91,6 +91,8 @@
   ul.models{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:7px}
   ul.models li{font:12px var(--mono);padding:4px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);color:var(--ink-2);transition:background .14s,border-color .14s}
   ul.models li:hover{background:var(--panel-3);border-color:var(--line-2)}
+  ul.models li.m-claude{border-color:oklch(76% 0.13 70 / 40%);color:oklch(82% 0.10 70)}
+  ul.models li.m-gpt{border-color:oklch(72% 0.10 240 / 40%);color:oklch(80% 0.08 240)}
 
   label{display:block;font-size:11px;color:var(--ink-3);margin:14px 0 6px;font-weight:600;letter-spacing:.02em}
   input,textarea,select{width:100%;font:13px var(--mono);background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:9px 11px;transition:border-color .14s,box-shadow .14s}
@@ -300,12 +302,33 @@ async function status(){
     $('#mStatus').textContent = '—';
   }
 }
+let ALL_MODELS = [];
+function isClaude(id){ return /^claude/i.test(id || ""); }
+function isGpt(id){ return /^gpt-/i.test(id || "") || /gpt-5/i.test(id || ""); }
 async function models(){
   const [s, d] = await json('/v1/models');
+  ALL_MODELS = (d.data || []).map((m) => m.id);
+  // chips: all models, grouped visually (Claude first, GPT after)
   const ul = $('#models'); ul.innerHTML = '';
-  const sel = $('#model'); sel.innerHTML = '';
-  (d.data || []).forEach((m) => { const li = document.createElement('li'); li.textContent = m.id; ul.append(li);
-    const o = document.createElement('option'); o.value = m.id; o.textContent = m.id; sel.append(o); });
+  ALL_MODELS.forEach((id) => {
+    const li = document.createElement('li');
+    li.textContent = id;
+    li.className = isClaude(id) ? 'm-claude' : (isGpt(id) ? 'm-gpt' : '');
+    ul.append(li);
+  });
+  renderModelSelect();
+}
+function renderModelSelect(){
+  const sel = $('#model'); const prev = sel.value;
+  sel.innerHTML = '';
+  // In OpenAI segment show GPT models (the native OpenAI host family);
+  // in Anthropic segment show Claude models (the native Anthropic family).
+  // Cross-family still works on the wire (proxy translates), but the picker
+  // defaults to the family that matches the chosen protocol.
+  const want = proto === 'anthropic' ? 'claude' : 'gpt';
+  const list = ALL_MODELS.filter((id) => want === 'claude' ? isClaude(id) : isGpt(id));
+  list.forEach((id) => { const o = document.createElement('option'); o.value = id; o.textContent = id; sel.append(o); });
+  if (prev && list.includes(prev)) sel.value = prev;
 }
 async function test(){
   const out = $('#testOut'); out.textContent = '…';
@@ -386,6 +409,7 @@ function setProto(p){
   proto = p;
   $('#protoOpenai').setAttribute('aria-pressed', String(p === 'openai'));
   $('#protoAnthropic').setAttribute('aria-pressed', String(p === 'anthropic'));
+  renderModelSelect();
 }
 $('#protoOpenai').onclick = () => setProto('openai');
 $('#protoAnthropic').onclick = () => setProto('anthropic');
