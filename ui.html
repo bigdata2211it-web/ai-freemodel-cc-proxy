@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>freemodel-cc-proxy</title>
+<style>
+  :root{--bg:#0f1115;--surface:#171a21;--surface2:#1f232c;--border:#2a2f3a;--ink:#e6e9ef;--muted:#8a93a3;--accent:#cc7722;--ok:#3fb950;--err:#f85149;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+  a{color:var(--accent)}
+  header{padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:18px;margin:0;font-weight:600;letter-spacing:.2px}
+  header .badge{font:600 11px var(--mono);padding:2px 8px;border-radius:4px;background:rgba(63,185,80,.12);color:var(--ok);border:1px solid rgba(63,185,80,.25)}
+  header .badge.err{background:rgba(248,81,73,.12);color:var(--err);border-color:rgba(248,81,73,.25)}
+  main{max-width:1100px;margin:0 auto;padding:24px;display:grid;gap:20px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px}
+  .card h2{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .kv{display:grid;grid-template-columns:130px 1fr;gap:6px 14px;font-size:13px}
+  .kv dt{color:var(--muted);font-family:var(--mono);font-size:12px}
+  .kv dd{margin:0;font-family:var(--mono);word-break:break-all}
+  ul.models{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:8px}
+  ul.models li{font:12px var(--mono);padding:5px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+  input,textarea,select{width:100%;font:13px var(--mono);background:var(--surface2);color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:8px 10px}
+  textarea{resize:vertical;min-height:70px}
+  button{font:600 13px system-ui;background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 16px;cursor:pointer;margin-top:12px}
+  button:hover{filter:brightness(1.1)}
+  button.ghost{background:var(--surface2);color:var(--ink);border:1px solid var(--border)}
+  .row{display:flex;gap:10px;align-items:center}
+  .row>*{flex:1}
+  #testOut{font:12px var(--mono);white-space:pre-wrap;background:#000;border:1px solid var(--border);border-radius:6px;padding:10px;min-height:60px;max-height:260px;overflow:auto;margin-top:12px}
+  #logs{font:11px var(--mono);background:#000;border:1px solid var(--border);border-radius:6px;padding:10px;height:240px;overflow:auto}
+  #logs .ln{display:grid;grid-template-columns:150px 50px 1fr 40px;gap:8px;padding:2px 0;border-bottom:1px solid #14171c}
+  #logs .st_2{color:var(--ok)}#logs .st_4,#logs .st_5{color:var(--err)}
+  .muted{color:var(--muted)}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>freemodel-cc-proxy</h1>
+  <span id="badge" class="badge">checking…</span>
+  <span class="muted" id="ver"></span>
+</header>
+<main>
+  <section class="card">
+    <h2>Status</h2>
+    <dl class="kv" id="status"><dt>…</dt><dd></dd></dl>
+    <p class="hint">Use this endpoint as your base URL with any Anthropic-compatible client.</p>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Available models</h2>
+      <ul class="models" id="models"><li class="muted">loading…</li></ul>
+      <label for="model">Test model</label>
+      <select id="model"></select>
+      <label for="prompt">Test prompt</label>
+      <textarea id="prompt">Reply with exactly: ok</textarea>
+      <div class="row"><button id="run">Send test</button><button class="ghost" id="refresh">Refresh</button></div>
+      <div id="testOut"></div>
+    </section>
+
+    <section class="card">
+      <h2>Recent requests</h2>
+      <div id="logs"><span class="muted">no requests yet</span></div>
+      <button class="ghost" id="refLogs" style="margin-top:12px">Refresh logs</button>
+    </section>
+  </div>
+</main>
+
+<script>
+const $=(s)=>document.querySelector(s);
+async function json(u,o){const r=await fetch(u,o);return [r.status,await r.json().catch(()=>({}))];}
+async function status(){
+  const[s,d]=await json('/api/status');
+  const b=$('#badge');
+  if(s===200){b.textContent='running';b.classList.remove('err');}
+  else{b.textContent='down';b.classList.add('err');return;}
+  $('#ver').textContent='v'+(d.version||'')+' · up '+d.uptime_s+'s';
+  const kv=$('#status');kv.innerHTML='';
+  const rows=[['base URL',location.origin],['API endpoint',location.origin+'/v1/messages'],['upstream','https://'+d.upstream+'/v1/messages?beta=true'],['key',d.key],['device_id',d.device_id],['session_id',d.session_id]];
+  rows.forEach(([k,v])=>{const dt=document.createElement('dt');dt.textContent=k;const dd=document.createElement('dd');dd.textContent=v;kv.append(dt,dd);});
+}
+async function models(){
+  const[s,d]=await json('/v1/models');
+  const ul=$('#models');ul.innerHTML='';
+  const sel=$('#model');sel.innerHTML='';
+  (d.data||[]).forEach(m=>{const li=document.createElement('li');li.textContent=m.id;ul.append(li);
+    const o=document.createElement('option');o.value=m.id;o.textContent=m.id;sel.append(o);});
+}
+async function test(){
+  const out=$('#testOut');out.textContent='…';
+  const[s,d]=await json('/api/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:$('#model').value,prompt:$('#prompt').value})});
+  if(d.ok){out.textContent='HTTP '+s+' · '+d.model+'\n\n'+d.raw;}
+  else{out.textContent='HTTP '+(d.status||s)+'\n\n'+(d.raw||d.error||JSON.stringify(d));}
+  refreshLogs();
+}
+async function refreshLogs(){
+  const[s,d]=await json('/api/logs');if(s!==200)return;
+  const el=$('#logs');el.innerHTML='';
+  (d.logs||[]).slice(0,80).forEach(l=>{
+    const ln=document.createElement('div');ln.className='ln';
+    const st=(l.status||'').toString();
+    ln.innerHTML='<span>'+l.ts+'</span><span>'+l.kind+'</span><span>'+l.method+' '+l.path+(l.note?' · '+l.note:'')+'</span><span class="st_'+st[0]+'">'+st+'</span>';
+    el.append(ln);
+  });
+  if(!el.children.length){const sp=document.createElement('span');sp.className='muted';sp.textContent='no requests yet';el.append(sp);}
+}
+$('#run').onclick=test;
+$('#refresh').onclick=()=>{status();models();refreshLogs();};
+$('#refLogs').onclick=refreshLogs;
+status();models();refreshLogs();
+setInterval(refreshLogs,4000);
+</script>
+</body>
+</html>

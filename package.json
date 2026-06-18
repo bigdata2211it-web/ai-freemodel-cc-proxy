@@ -1,0 +1,15 @@
+{
+  "name": "freemodel-cc-proxy",
+  "version": "1.0.0",
+  "description": "Local Anthropic Messages API backed by FreeModel's cc.freemodel.dev — real Claude Opus/Sonnet/Haiku for any Anthropic-compatible client (Factory Droid, Claude Code, Cline, Cursor, Anthropic SDK), by impersonating the official Claude Code request fingerprint.",
+  "main": "index.js",
+  "bin": { "freemodel-cc-proxy": "index.js" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": { "node": ">=18" },
+  "files": ["index.js", "ui.html", "package.json", "README.md", "LICENSE", "start.sh", "start.cmd", "start.ps1", "install", "systemd"],
+  "keywords": ["freemodel", "claude", "anthropic", "proxy", "byok", "droid", "claude-code", "opus", "sonnet"],
+  "license": "MIT",
+  "author": "bigdata2211it-web"
+}

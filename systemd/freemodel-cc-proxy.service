@@ -1,0 +1,17 @@
+[Unit]
+Description=FreeModel CC Proxy — local Anthropic Messages API backed by cc.freemodel.dev
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node %h/Documents/freemodel-cc-proxy/index.js
+Restart=on-failure
+RestartSec=5
+Environment=FMCC_PORT=11440
+Environment=FMCC_KEY=REPLACE_WITH_YOUR_FREEMODEL_KEY
+# Optional: override log file location
+# Environment=FMCC_LOG_FILE=%h/.freemodel-cc-proxy/proxy.log
+
+[Install]
+WantedBy=default.target
