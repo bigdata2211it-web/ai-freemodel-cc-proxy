@@ -195,6 +195,22 @@
     <span id="addMsg" class="hint" style="margin-left:2px;margin-top:8px"></span>
   </section>
 
+  <section class="card">
+    <h2>Профиль fingerprint (имитация клиента)</h2>
+    <div class="sub">значения, которые прокси подставляет, чтобы пройти гейт cc.freemodel.dev. Хранятся в файле — обновляются без правки кода (после апдейта Claude Code просто перезахвати через mitmproxy и вставь сюда)</div>
+    <dl class="kv" id="fp"><dt>…</dt><dd></dd></dl>
+    <label for="fpUA">User-Agent</label>
+    <input id="fpUA" placeholder="claude-cli/… (external, sdk-cli)">
+    <label for="fpBeta">anthropic-beta</label>
+    <input id="fpBeta">
+    <label for="fpBill">billing-header (первый system-блок)</label>
+    <input id="fpBill">
+    <label for="fpAgent">agent-header (второй system-блок)</label>
+    <input id="fpAgent">
+    <div class="row" style="margin-top:6px"><button class="btn" id="fpSave">Сохранить и применить</button><button class="btn ghost" id="fpReload">Перечитать</button></div>
+    <span id="fpMsg" class="hint" style="margin-top:8px"></span>
+  </section>
+
   <div class="grid">
     <section class="card">
       <h2>Тест</h2>
@@ -294,11 +310,28 @@ async function models(){
 async function test(){
   const out = $('#testOut'); out.textContent = '…';
   const [s, d] = await json('/api/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: $('#model').value, prompt: $('#prompt').value, proto }) });
-  if (d.ok){ out.textContent = 'HTTP ' + s + ' · ' + d.model + '\n\n' + d.raw; }
-  else { out.textContent = 'HTTP ' + (d.status || s) + '\n\n' + (d.raw || d.error || JSON.stringify(d)); }
+  if (d.ok){ out.textContent = 'HTTP ' + s + ' · ' + d.model + ' · ' + (d.proto || '?') + ' → ' + (d.path || '') + (d.upstream ? '\nupstream: ' + d.upstream : '') + '\n\n' + d.raw; }
+  else { out.textContent = 'HTTP ' + (d.status || s) + ' · ' + (d.proto || '') + ' → ' + (d.path || '') + '\n\n' + (d.raw || d.error || JSON.stringify(d)); }
   refreshLogs();
 }
 async function refreshKeys(){
+async function loadFp(){
+  const [s, d] = await json('/api/fingerprint'); if (s !== 200) return;
+  const kv = $('#fp'); kv.innerHTML = '';
+  [['файл профиля', d.profileFile], ['захвачено с', d.capturedFrom]].forEach(([k,v]) => {
+    const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v || '—'; kv.append(dt, dd);
+  });
+  $('#fpUA').value = d.userAgent || '';
+  $('#fpBeta').value = d.anthropicBeta || '';
+  $('#fpBill').value = d.billingHeader || '';
+  $('#fpAgent').value = d.agentHeader || '';
+}
+async function saveFp(){
+  const body = { userAgent: $('#fpUA').value.trim(), anthropicBeta: $('#fpBeta').value.trim(), billingHeader: $('#fpBill').value.trim(), agentHeader: $('#fpAgent').value.trim() };
+  const [s, d] = await json('/api/fingerprint', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const m = $('#fpMsg'); m.textContent = (s === 200) ? 'применено: ' + (d.profile && d.profile.capturedFrom || 'ok') : ('ошибка: ' + JSON.stringify(d));
+  setTimeout(() => { m.textContent = ''; }, 3500);
+}
   const [s, d] = await json('/api/keys'); if (s !== 200) return;
   const el = $('#keys');
   const cur = (d.keys || []).find((k) => k.current);
@@ -361,7 +394,9 @@ $('#refresh').onclick = () => { status(); models(); refreshLogs(); refreshKeys()
 $('#refLogs').onclick = refreshLogs;
 $('#addBtn').onclick = addKeys;
 $('#findBtn').onclick = findWorking;
-status(); models(); refreshLogs(); refreshKeys();
+$('#fpSave').onclick = saveFp;
+$('#fpReload').onclick = loadFp;
+status(); models(); refreshLogs(); refreshKeys(); loadFp();
 setInterval(() => { refreshLogs(); refreshKeys(); }, 4000);
 </script>
 </body>

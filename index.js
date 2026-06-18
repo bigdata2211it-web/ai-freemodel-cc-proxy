@@ -123,16 +123,43 @@ if (!KEY_POOL.length) {
   process.exit(1);
 }
 
-// ─── fingerprint (captured from official Claude Code via mitmproxy) ───────
-// cc.freemodel.dev validates the request BODY shape, not TLS or key.
-// Required: stream:true, two leading system blocks, metadata.user_id as a
-// JSON string with device_id/account_uuid/session_id, plus Claude Code headers.
-const BILLING_HDR = "x-anthropic-billing-header: cc_version=2.1.179.efd; cc_entrypoint=sdk-cli; cch=fa71b;";
-const AGENT_HDR = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
-const ANTHROPIC_BETA =
-  "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27," +
-  "prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24";
-const UA = "claude-cli/2.1.179 (external, sdk-cli)";
+// ─── fingerprint (client-impersonation profile, externalized) ────────────
+// cc.freemodel.dev validates the request BODY shape, not TLS or key. The
+// required values are the ones the official Claude Code client sends, captured
+// via mitmproxy. They are NOT hardcoded in code — they live in a profile file
+// so they can be refreshed after a FreeModel/Claude-Code update without
+// touching index.js. Load order: env FMCC_FINGERPRINT_FILE →
+// ~/.freemodel-cc-proxy/fingerprint.json → built-in defaults below.
+const FINGERPRINT_FILE = process.env.FMCC_FINGERPRINT_FILE || path.join(CONFIG_DIR, "fingerprint.json");
+const FINGERPRINT_DEFAULTS = {
+  // The leading system block that carries the Claude Code billing/identity tag.
+  billingHeader: "x-anthropic-billing-header: cc_version=2.1.179.efd; cc_entrypoint=sdk-cli; cch=fa71b;",
+  // The second leading system block.
+  agentHeader: "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+  // User-Agent the gate expects.
+  userAgent: "claude-cli/2.1.179 (external, sdk-cli)",
+  // anthropic-beta header value.
+  anthropicBeta: "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24",
+  // anthropic-version header value.
+  anthropicVersion: "2023-06-01",
+  // captured from Claude Code 2.1.179; bump when FreeModel tightens the gate.
+  capturedFrom: "claude-cli/2.1.179",
+};
+function loadFingerprint() {
+  let fp = { ...FINGERPRINT_DEFAULTS };
+  try { Object.assign(fp, JSON.parse(fs.readFileSync(FINGERPRINT_FILE, "utf8"))); } catch {}
+  // env overrides for individual fields
+  for (const k of Object.keys(FINGERPRINT_DEFAULTS)) {
+    const env = process.env["FMCC_FP_" + k.replace(/([A-Z])/g, "_$1").toUpperCase()];
+    if (env != null) fp[k] = env;
+  }
+  return fp;
+}
+const FP = loadFingerprint();
+const BILLING_HDR = FP.billingHeader;
+const AGENT_HDR = FP.agentHeader;
+const UA = FP.userAgent;
+const ANTHROPIC_BETA = FP.anthropicBeta;
 const DEVICE_ID = crypto.randomBytes(32).toString("hex");
 const SESSION_ID = crypto.randomUUID();
 
@@ -401,7 +428,7 @@ function buildUpstreamHeaders(bodyBuf, key, extra) {
     "user-agent": UA,
     "x-app": "cli",
     "anthropic-dangerous-direct-browser-access": "true",
-    "anthropic-version": "2023-06-01",
+    "anthropic-version": FP.anthropicVersion,
     "anthropic-beta": ANTHROPIC_BETA,
     "accept": "application/json",
     "content-type": "application/json",
@@ -850,10 +877,34 @@ const server = http.createServer((creq, cres) => {
       uptime_s: Math.round(process.uptime()),
       endpoints: ["POST /v1/messages (Anthropic; claude-* → cc host, gpt-* → api host)", "POST /v1/chat/completions (OpenAI; gpt-* → api host direct, claude-* → cc host)", "GET /v1/models (merged: Claude + GPT)"],
       upstreams: { claude: CFG.upstream, openai: CFG.upstreamOpenai },
+      fingerprint: { capturedFrom: FP.capturedFrom, userAgent: FP.userAgent, profileFile: FINGERPRINT_FILE },
     });
     return;
   }
   if (url === "/api/logs") { sendJson(cres, 200, { logs: LOGS.slice().reverse() }); return; }
+
+  // Fingerprint profile (read + update without editing code)
+  if (url === "/api/fingerprint") {
+    if (creq.method === "GET") {
+      sendJson(cres, 200, { ...FP, profileFile: FINGERPRINT_FILE });
+      return;
+    }
+    if (creq.method === "PUT") {
+      readJsonBody(creq, (body) => {
+        const next = { ...FP };
+        for (const k of Object.keys(FINGERPRINT_DEFAULTS)) if (body[k] != null && typeof body[k] === "string") next[k] = body[k];
+        try {
+          fs.mkdirSync(CONFIG_DIR, { recursive: true });
+          fs.writeFileSync(FINGERPRINT_FILE, JSON.stringify(next, null, 2) + "\n");
+          // live-apply in-process
+          Object.assign(FP, next);
+          pushLog({ kind: "api", method: "PUT", path: "/api/fingerprint", status: 200, note: "profile updated" });
+          sendJson(cres, 200, { ok: true, profile: { ...FP, profileFile: FINGERPRINT_FILE }, note: "applied live; restart to re-read file if edited externally" });
+        } catch (e) { sendJson(cres, 500, { ok: false, error: e.message }); }
+      });
+      return;
+    }
+  }
 
   // Key pool management (UI + CLI keys.js + AI agents)
   if (url === "/api/keys") {
@@ -927,50 +978,39 @@ const server = http.createServer((creq, cres) => {
       try { reqBody = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { reqBody = {}; }
       const model = reqBody.model || "claude-opus-4-8";
       const prompt = reqBody.prompt || "Reply with exactly: ok";
-      const logEntry = { kind: "test", method: "POST", path: isGptModel(model) ? "/v1/chat/completions" : "/v1/messages", status: null, note: model };
-      const finish = (status, ok, raw) => { logEntry.status = status; pushLog(logEntry); sendJson(cres, status, { ok, model, status, raw }); };
-
-      if (isGptModel(model)) {
-        // GPT model → api.freemodel.dev via OpenAI Chat Completions (non-stream for the UI)
-        const oai = { model, max_tokens: 64, stream: false, messages: [{ role: "user", content: prompt }] };
-        const obuf = Buffer.from(JSON.stringify(oai));
-        const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers: buildOpenAIUpstreamHeaders(obuf, currentKey()) }, (upres) => {
-          const data = []; upres.on("data", (c) => data.push(c));
-          upres.on("end", () => {
-            const text = Buffer.concat(data).toString("utf8");
-            const st = upres.statusCode || 502;
-            if (st !== 200) { finish(st, false, text); return; }
-            let out = text;
-            try { const d = JSON.parse(text); out = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || text; } catch {}
-            finish(st, true, out);
-          });
-        });
-        up.on("error", (e) => finish(502, false, e.message));
-        up.write(obuf); up.end();
-        return;
-      }
-
-      // Claude model → cc.freemodel.dev via Anthropic Messages (fingerprinted)
-      const body = JSON.stringify({ model, max_tokens: 64, stream: false, messages: [{ role: "user", content: [{ type: "text", text: prompt }] }] });
-      const injected = injectFingerprint(body);
-      const buf = Buffer.from(injected.body);
-      const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers: buildUpstreamHeaders(buf, currentKey()) }, (upres) => {
-        const data = [];
-        upres.on("data", (c) => data.push(c));
+      const proto = reqBody.proto === "anthropic" ? "anthropic" : "openai";
+      const isGpt = isGptModel(model);
+      // Route through the REAL endpoint (loopback) so the test exercises the
+      // exact path a client would use: chosen protocol × model family.
+      const path = proto === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
+      const body = proto === "anthropic"
+        ? { model, max_tokens: 64, stream: false, messages: [{ role: "user", content: [{ type: "text", text: prompt }] }] }
+        : { model, max_tokens: 64, stream: false, messages: [{ role: "user", content: prompt }] };
+      const buf = Buffer.from(JSON.stringify(body));
+      const logEntry = { kind: "test", method: "POST", path: path + "(" + proto + ")", status: null, note: model + (isGpt ? " [gpt]" : " [claude]") };
+      const up = http.request({ host: "127.0.0.1", port: CFG.port, method: "POST", path, headers: { "content-type": "application/json", "content-length": buf.length } }, (upres) => {
+        const data = []; upres.on("data", (c) => data.push(c));
         upres.on("end", () => {
           const text = Buffer.concat(data).toString("utf8");
           const st = upres.statusCode || 502;
-          if (st !== 200) { finish(st, false, text); return; }
-          const r = collectAnthropicMessage(text);
+          logEntry.status = st; pushLog(logEntry);
+          if (st !== 200) { sendJson(cres, st, { ok: false, model, proto, path, status: st, raw: text }); return; }
+          // extract text from either response shape
           let out = text;
-          if (r.ok) {
-            const txt = (r.message.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
-            if (txt) out = txt;
-          } else out = JSON.stringify(r.error || {});
-          finish(st, r.ok, out);
+          try {
+            const d = JSON.parse(text);
+            if (proto === "anthropic") {
+              const txt = (d.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+              if (txt) out = txt;
+            } else {
+              const c = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
+              if (c) out = c;
+            }
+          } catch {}
+          sendJson(cres, 200, { ok: true, model, proto, path, upstream: isGpt ? CFG.upstreamOpenai : CFG.upstream, status: st, raw: out });
         });
       });
-      up.on("error", (e) => finish(502, false, e.message));
+      up.on("error", (e) => { logEntry.status = 502; logEntry.note = e.message; pushLog(logEntry); sendJson(cres, 502, { ok: false, error: e.message }); });
       up.write(buf); up.end();
     });
     return;
