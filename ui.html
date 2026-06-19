@@ -340,6 +340,88 @@
 </style>
 </head>
 <body>
+<style>
+  /* ── new: provider spaces, key table, proto banner (clean FreeModel / OpenCode Go split) ── */
+  .prov-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:clamp(18px,2vw,26px)}
+  .prov-card{flex:1;min-width:280px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);padding:18px 20px;position:relative;transition:border-color .15s,box-shadow .15s}
+  .prov-card.off{opacity:.78}
+  .prov-card .ptop{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:6px}
+  .prov-card .pname{font:650 17px var(--sans);color:var(--ink);letter-spacing:-.01em;margin:0}
+  .prov-card .pkind{font:600 11px var(--mono);color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em;margin:2px 0 0}
+  .prov-card .ptoggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+  .prov-card .ptoggle .trk{width:38px;height:22px;border-radius:var(--r-pill);background:var(--panel-2);border:1px solid var(--line);position:relative;transition:background .15s,border-color .15s}
+  .prov-card .ptoggle .kb{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--ink-4);transition:transform .15s,background .15s}
+  .prov-card .ptoggle[aria-checked="true"] .trk{background:var(--accent-soft);border-color:var(--accent)}
+  .prov-card .ptoggle[aria-checked="true"] .kb{transform:translateX(16px);background:var(--accent)}
+  .prov-card .ptoggle .stt{font:700 10px var(--mono);color:var(--ink-4);text-transform:uppercase}
+  .prov-card .pnote{font:13px var(--sans);color:var(--ink-3);margin:6px 0 10px}
+  .prov-card .pstats{display:flex;gap:14px;flex-wrap:wrap;font:12px var(--mono);color:var(--ink-4)}
+  .prov-card .pstats b{color:var(--ink-2);font-weight:600}
+  .prov-card .paddr{font:11.5px var(--mono);color:var(--ink-4);margin-top:8px;word-break:break-all}
+  .prov-card .pact{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
+
+  .proto-banner{background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);border-radius:var(--r-card);padding:18px 22px;margin-bottom:clamp(20px,2.4vw,30px);text-align:center}
+  .proto-banner h2{font:650 19px var(--sans);color:var(--ink);margin:0 0 4px;letter-spacing:-.01em}
+  .proto-banner p{font:14px var(--sans);color:var(--ink-3);margin:0}
+  .proto-banner .pills{display:flex;gap:10px;justify-content:center;margin-top:12px;flex-wrap:wrap}
+  .proto-banner .pill{font:600 12px var(--mono);padding:5px 14px;border-radius:var(--r-pill);background:var(--panel-2);border:1px solid var(--line);color:var(--ink-2)}
+  .proto-banner .arrow{color:var(--accent);font-weight:700}
+
+  .pspace{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);padding:20px 22px;margin-bottom:clamp(18px,2vw,26px)}
+  .pspace.off{opacity:.7}
+  .pspace h3{font:650 15px var(--sans);color:var(--ink);margin:0 0 4px;letter-spacing:-.005em}
+  .pspace .sub{font:12.5px var(--sans);color:var(--ink-3);margin:0 0 14px}
+
+  /* key table — convenient add/remove + visible statuses */
+  .keytable{width:100%;border-collapse:collapse;font:13px var(--mono)}
+  .keytable th{text-align:left;font:600 10.5px var(--sans);text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);padding:8px 10px;border-bottom:1px solid var(--line)}
+  .keytable td{padding:9px 10px;border-bottom:1px solid var(--line-2);vertical-align:middle}
+  .keytable tr.cur td{background:var(--accent-soft)}
+  .keytable .idx{color:var(--ink-4);width:28px}
+  .keytable .kcell{color:var(--ink-2)}
+  .keytable .star{color:var(--accent);width:18px}
+  .kstatus{font:600 11px var(--mono);display:inline-flex;align-items:center;gap:6px}
+  .kstatus::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ink-4)}
+  .kstatus.ok{color:var(--ok)}.kstatus.ok::before{background:var(--ok)}
+  .kstatus.bad{color:var(--err)}.kstatus.bad::before{background:var(--err)}
+  .kstatus.lim{color:var(--warn)}.kstatus.lim::before{background:var(--warn)}
+  .kstatus.cur{color:var(--accent)}.kstatus.cur::before{background:var(--accent)}
+  .kstatus.idle{color:var(--ink-4)}
+  .kbtn{font:600 11px var(--sans);border:1px solid var(--line);background:var(--panel-2);color:var(--ink-3);border-radius:6px;padding:3px 10px;cursor:pointer}
+  .kbtn:hover{color:var(--err);border-color:var(--err)}
+  .kbtn.del:hover{background:oklch(68% 0.18 22 / 10%)}
+  .keyadd{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+  .keyadd input{flex:1;min-width:200px;font:13px var(--mono);background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:9px 11px}
+  .keyadd input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+
+  .models-wrap{display:flex;flex-wrap:wrap;gap:7px}
+  .mtag{font:12px var(--mono);padding:5px 11px;border-radius:var(--r-pill);background:var(--panel-2);border:1px solid var(--line);color:var(--ink-2)}
+  .mtag.claude{border-color:oklch(76% 0.13 70 / 40%);color:oklch(82% 0.10 70)}
+  .mtag.gpt{border-color:oklch(72% 0.10 240 / 40%);color:oklch(80% 0.08 240)}
+  .mtag.other{border-color:var(--accent-line);color:var(--accent)}
+
+  .testrow{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px}
+  .testrow select,.testrow textarea{font:13px var(--mono);background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:8px 10px}
+  .testrow select{min-width:200px}
+  .testrow textarea{flex:1;min-width:220px;min-height:42px;resize:vertical}
+  .seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);padding:3px}
+  .seg button{border:0;background:transparent;color:var(--ink-3);font:600 12.5px var(--sans);padding:6px 16px;border-radius:var(--r-pill);cursor:pointer}
+  .seg button[aria-pressed="true"]{color:var(--ink);background:var(--panel-3);box-shadow:var(--shadow-sm)}
+  .testout{font:12.5px var(--mono);white-space:pre-wrap;word-break:break-word;background:oklch(96% 0.004 264);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:12px;margin-top:12px;min-height:48px;color:var(--ink-2)}
+  .testout .meta{color:var(--ink-4);font-size:11px;margin-bottom:4px}
+  .testout .ok{color:var(--ok)}.testout .err{color:var(--err)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font:11.5px var(--sans);color:var(--ink-3)}
+  .toast{font:12.5px var(--sans);color:var(--ink-3)}
+  .row{display:flex;gap:10px;align-items:center}
+  .row>*{flex:none}
+  button.btn{font:600 13px var(--sans);background:var(--accent);color:var(--accent-ink);border:0;border-radius:var(--r-ctrl);padding:8px 16px;cursor:pointer}
+  button.btn.ghost{background:var(--panel-2);color:var(--ink-2);border:1px solid var(--line)}
+  .hint{font:12.5px var(--sans);color:var(--ink-3);margin-top:10px}
+  .fpgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:760px){.fpgrid{grid-template-columns:1fr}.prov-card{min-width:100%}}
+  .fpgrid input{width:100%;font:12.5px var(--mono);background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:8px 10px}
+  .fpgrid label{display:block;font:600 11px var(--sans);color:var(--ink-3);margin:0 0 4px;text-transform:uppercase;letter-spacing:.04em}
+</style>
 
 <header class="top">
   <a class="brand" href="#" onclick="return false">
@@ -352,567 +434,296 @@
       <span class="dot ok" id="pulse" aria-hidden="true"></span>
       <span class="badge" id="badge">проверка…</span>
     </span>
-    <label class="prov-sel" for="providerSelect">
-      <span class="prov-sel-lbl">провайдер</span>
-      <select id="providerSelect" aria-label="Активный провайдер"></select>
-    </label>
-    <div class="toggle" id="profileToggle" role="switch" aria-checked="true" tabindex="0" aria-label="Включить или отключить профиль">
-      <span class="lbl"><span id="profileLbl">FreeModel</span></span>
-      <span class="track" aria-hidden="true"><span class="knob"></span></span>
-      <span class="state" id="profileState">ON</span>
-    </div>
   </div>
 </header>
 
 <main>
-  <!-- 1 · PROFILE / PROVIDER HERO + ROUTING DIAGRAM -->
-  <section class="hero reveal" id="profileCard" aria-labelledby="heroTitle">
-    <div class="hero-top">
-      <div class="hero-id">
-        <p class="eyebrow accent">Активный провайдер</p>
-        <h1 class="display" id="heroTitle">FreeModel</h1>
-        <p class="lede" id="profileNote">—</p>
-      </div>
-      <div class="hero-state">
-        <span class="state-pill" id="heroStatePill">включён</span>
-        <div aria-hidden="true" style="font:600 11px var(--sans);color:var(--ink-4);text-transform:uppercase;letter-spacing:.1em">профиль · 1 из 1</div>
-      </div>
+  <div class="proto-banner reveal">
+    <h2>Любой протокол → любая модель</h2>
+    <p>Клиент может говорить на OpenAI или Anthropic — прокси сам переводит. Все включённые провайдеры работают одновременно; модель уходит к тому провайдеру, который её обслуживает.</p>
+    <div class="pills">
+      <span class="pill">POST /v1/chat/completions</span>
+      <span class="pill">POST /v1/messages</span>
+      <span class="pill">GET /v1/models</span>
     </div>
+    <p class="hint" style="margin-top:12px">База: <span class="mono" id="docBase">http://127.0.0.1:11440</span> · ключ на клиенте любой (прокси подставляет свой из пула).</p>
+  </div>
 
-    <dl class="hero-meta">
-      <span class="hm"><dt class="hk">id</dt><dd class="hv" id="profileId">freemodel</dd></span>
-      <span class="hm"><dt class="hk">kind</dt><dd class="hv" id="provKind">—</dd></span>
-      <span class="hm"><dt class="hk">базовый URL</dt><dd class="hv" id="docBase">http://127.0.0.1:11440</dd></span>
-      <span class="hm"><dt class="hk">claude upstream</dt><dd class="hv" id="upClaude">—</dd></span>
-      <span class="hm"><dt class="hk">openai upstream</dt><dd class="hv" id="upOpenai">—</dd></span>
-      <span class="hm"><dt class="hk">upstream baseUrl</dt><dd class="hv" id="upBase">—</dd></span>
-    </dl>
+  <div id="provRow" class="prov-row reveal"></div>
 
-    <div class="hero-actions">
-      <button class="btn ghost" id="editProfileBtn" aria-expanded="false" aria-controls="profileEdit">Редактировать профиль</button>
-      <button class="btn ghost" id="refreshTop">Обновить состояние</button>
-    </div>
-
-    <div class="profile-edit" id="profileEdit" hidden>
-      <div class="row2">
-        <div><label for="profileNameInput">Название</label><input id="profileNameInput" placeholder="FreeModel"></div>
-        <div><label for="profileNoteInput">Заметка</label><textarea id="profileNoteInput" style="min-height:60px"></textarea></div>
-      </div>
-      <div class="row" style="margin-top:8px">
-        <button class="btn" id="profileSave">Сохранить</button>
-        <span class="toast" id="profileMsg" role="status" aria-live="polite"></span>
-      </div>
-    </div>
-
-    <div class="diagram" aria-label="Схема маршрутизации запросов">
-      <p class="d-eyebrow">Маршрут запроса</p>
-
-      <div class="stages">
-        <div class="stage">
-          <span class="stage-num">01 · Клиент</span>
-          <span class="stage-title">Любой OpenAI / Anthropic-клиент</span>
-          <span class="stage-desc">Factory Droid, Claude Code, Pi, Cursor, Cline, SDK.</span>
-          <span class="stage-code" id="diagBase">http://127.0.0.1:11440</span>
-        </div>
-        <div class="sconn" aria-hidden="true"></div>
-        <div class="stage">
-          <span class="stage-num">02 · Протокол</span>
-          <span class="stage-title">Выбор протокола</span>
-          <div class="stage-tags">
-            <span class="pill muted">POST /v1/chat/completions</span>
-            <span class="pill muted">POST /v1/messages</span>
-          </div>
-        </div>
-        <div class="sconn" aria-hidden="true"></div>
-        <div class="stage">
-          <span class="stage-num">03 · Роутинг</span>
-          <span class="stage-title">По <span class="mono">model id</span></span>
-          <div class="stage-tags">
-            <span class="pill claude">claude-* → Claude path</span>
-            <span class="pill gpt">gpt-* → GPT path</span>
-          </div>
-        </div>
-      </div>
-
-      <svg class="fork" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M50 0 V10 M25 10 H75 M25 10 V24 M75 10 V24"/>
-      </svg>
-      <div class="fork-mobile" aria-hidden="true"></div>
-
-      <div class="branch-row">
-        <div class="branch claude">
-          <div class="branch-head"><span class="pill claude">claude-*</span></div>
-          <div class="branch-title">Claude family</div>
-          <div class="branch-host mono" id="diagUpClaude">cc.freemodel.dev</div>
-          <div class="branch-desc">Inject fingerprint — системные блоки + metadata + User-Agent — и запрос уходит на хост Claude Code, который отдаёт реальный Claude.</div>
-        </div>
-        <div class="branch gpt">
-          <div class="branch-head"><span class="pill gpt">gpt-*</span></div>
-          <div class="branch-title">GPT family</div>
-          <div class="branch-host mono" id="diagUpGpt">api.freemodel.dev</div>
-          <div class="branch-desc">Прямой OpenAI Chat Completions без перевода и без fingerprint — сразу на GPT-5.x.</div>
-        </div>
-      </div>
-
-      <p class="hint" style="margin-top:24px">Один пул <code>fe_oa_</code>-ключей, последовательный слив (<span class="mono">#1 → #2 → …</span>), авто-ротация на 401 / 402 / 429 / 5xx. Авторизация на клиенте необязательна — прокси подставляет ключ из пула.</p>
-    </div>
+  <section class="block reveal" aria-labelledby="logsTitle" style="margin-top:6px">
+    <h2 class="section-title" id="logsTitle" style="font-size:18px">Лог запросов</h2>
+    <p class="section-sub">Все запросы через все провайдеры — время, модель/провайдер, статус.</p>
+    <div id="logs" style="margin-top:14px"><div class="empty">запросов пока нет</div></div>
+    <div class="row" style="margin-top:14px"><button class="btn ghost" id="refLogs">Обновить лог</button></div>
   </section>
 
-  <!-- 2 · HERO METRICS -->
-  <section class="metrics" aria-label="Метрики состояния">
-    <div class="metric reveal"><div class="k">Статус</div><div class="v" id="mStatus">—</div><div class="s" id="mUp">—</div></div>
-    <div class="metric reveal"><div class="k">Ключей в пуле</div><div class="v" id="mKeys">—</div><div class="s" id="mKeyActive">—</div></div>
-    <div class="metric reveal"><div class="k">Активный ключ</div><div class="v sm" id="mActive">—</div><div class="s" id="mActiveReq">—</div></div>
-    <div class="metric reveal"><div class="k">Запросов в логе</div><div class="v" id="mReq">—</div><div class="s" id="mReqLast">—</div></div>
-  </section>
-
-  <!-- 3 · MODELS -->
-  <section class="block reveal" aria-labelledby="modelsTitle">
-    <p class="eyebrow">Каталог моделей</p>
-    <h2 class="section-title" id="modelsTitle">Модели активного провайдера</h2>
-    <p class="section-sub"><code>GET /v1/models</code> — модели провайдера <span class="mono" id="modelsProvName">—</span> (<span class="mono" id="modelsProvKind">—</span>). Прокси переведёт любой протокол под любую модель.</p>
-    <div class="families" id="families">
-      <div class="family"><ul class="models" id="modelsList"><li class="muted">загрузка…</li></ul></div>
-    </div>
-  </section>
-
-  <!-- 4 · TEST PANEL -->
-  <section class="block reveal" aria-labelledby="testTitle">
-    <p class="eyebrow">Тестовый запрос</p>
-    <h2 class="section-title" id="testTitle">Прогон через реальный путь бэкенда</h2>
-    <p class="section-sub">Запрос уходит тем же маршрутом, что и клиентский: выбранный протокол × семейство модели. Протокол определяет список моделей: <strong>OpenAI → GPT</strong>, <strong>Anthropic → Claude</strong>.</p>
-    <div class="test-grid">
-      <div>
-        <div class="field">
-          <label>Протокол</label>
-          <div class="seg" role="tablist" aria-label="протокол теста">
-            <button id="protoOpenai" role="tab" aria-pressed="true">OpenAI</button>
-            <button id="protoAnthropic" role="tab" aria-pressed="false">Anthropic</button>
-          </div>
-        </div>
-        <div class="field">
-          <label for="model">Модель <span class="faint" id="modelHint">(по протоколу)</span></label>
-          <select id="model"></select>
-        </div>
-        <div class="field">
-          <label for="prompt">Запрос</label>
-          <textarea id="prompt">Ответь ровно одним словом: ok</textarea>
-        </div>
-        <div class="row">
-          <button class="btn" id="run">Отправить</button>
-          <button class="btn ghost" id="refresh">Обновить</button>
-        </div>
-      </div>
-      <div id="testOut" aria-live="polite" aria-label="Результат тестового запроса"><span class="ph">Здесь появится ответ — proto, path, upstream и тело.</span></div>
-    </div>
-  </section>
-
-  <!-- 5 · KEY POOL -->
-  <section class="block reveal" aria-labelledby="keysTitle">
-    <p class="eyebrow">Пул ключей</p>
-    <h2 class="section-title" id="keysTitle">Ключи активного провайдера</h2>
-    <p class="section-sub">Ключи drain’ятся по порядку (<span class="mono">#1 → #2 → …</span>) для провайдера <span class="mono" id="keysProvName">—</span>. На 401 / 403 / 429 прокси переводит указатель вперёд и повторяет тот же запрос; 5xx не сжигает пул.</p>
-    <div id="keys" style="margin-top:clamp(26px,3vw,38px)"><div class="empty">загрузка…</div></div>
-    <div class="legend">
-      <span class="st cur">активен</span><span class="st bad">битый (401)</span><span class="st lim">лимит</span><span class="st ok">ok</span><span class="st idle">простаивает</span>
-    </div>
-    <div class="key-add">
-      <div>
-        <label for="addkey">Добавить ключи (<span class="mono" id="addkeyPrefix">fe_oa_…</span>) — один или много, через пробел или перенос</label>
-        <textarea id="addkey" placeholder="…"></textarea>
-      </div>
-      <div class="row" style="flex-direction:column;align-items:stretch;gap:10px">
-        <button class="btn" id="addBtn">Добавить</button>
-        <button class="btn ghost" id="findBtn">Найти рабочий</button>
-        <span class="toast" id="addMsg" role="status" aria-live="polite"></span>
-      </div>
-    </div>
-  </section>
-
-  <!-- 6 · FINGERPRINT -->
-  <section class="block reveal" id="fpCard" aria-labelledby="fpTitle">
-    <p class="eyebrow">Профиль fingerprint</p>
-    <h2 class="section-title" id="fpTitle">Имитация клиента Claude Code</h2>
-    <p class="section-sub">Значения для прохождения гейта <span class="mono">cc.freemodel.dev</span>. Хранятся в файле, применяются live — без правки кода.</p>
-    <dl class="fp-meta" id="fpMeta">
-      <span class="hm"><dt class="hk">файл профиля</dt><dd class="hv" id="fpFile">—</dd></span>
-      <span class="hm"><dt class="hk">захвачено с</dt><dd class="hv" id="fpCaptured">—</dd></span>
-      <span class="hm"><dt class="hk">device id</dt><dd class="hv" id="devId">—</dd></span>
-      <span class="hm"><dt class="hk">session id</dt><dd class="hv" id="sesId">—</dd></span>
-    </dl>
-    <div class="fp-grid">
-      <div>
-        <div class="field"><label for="fpUA">User-Agent</label><input id="fpUA" placeholder="claude-cli/… (external, sdk-cli)"></div>
-        <div class="field"><label for="fpBeta">anthropic-beta</label><input id="fpBeta"></div>
-      </div>
-      <div>
-        <div class="field"><label for="fpBill">billing-header <span class="faint">(первый system-блок)</span></label><input id="fpBill"></div>
-        <div class="field"><label for="fpAgent">agent-header <span class="faint">(второй system-блок)</span></label><input id="fpAgent"></div>
-      </div>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <button class="btn" id="fpSave">Сохранить и применить</button>
-      <button class="btn ghost" id="fpReload">Перечитать</button>
-      <span class="toast" id="fpMsg" role="status" aria-live="polite"></span>
-    </div>
-  </section>
-
-  <!-- 7 · LOGS -->
-  <section class="block reveal" aria-labelledby="logsTitle">
-    <p class="eyebrow">Лог запросов</p>
-    <h2 class="section-title" id="logsTitle">Последние события бэкенда</h2>
-    <p class="section-sub">Каждый проходящий запрос — время, тип, метод и путь, статус. Обновляется автоматически.</p>
-    <div id="logs" style="margin-top:clamp(26px,3vw,38px)"><div class="empty">запросов пока нет</div></div>
-    <div class="row" style="margin-top:18px"><button class="btn ghost" id="refLogs">Обновить лог</button></div>
-  </section>
-
-  <!-- 8 · DOCS -->
   <details class="docs reveal">
-    <summary>
-      <span class="chev" aria-hidden="true">▸</span>
-      Документация
-      <span class="sum-sub">эндпоинты · ключи · клиенты · CLI</span>
-    </summary>
+    <summary><span class="chev" aria-hidden="true">▸</span> Документация <span class="sum-sub">эндпоинты · провайдеры · ключи · клиенты</span></summary>
     <div class="docs-body">
-      <h3>Эндпоинты прокси</h3>
+      <h3>Эндпоинты</h3>
       <dl class="docs-kv">
         <dt>Базовый URL</dt><dd><code id="docBase2">http://127.0.0.1:11440</code></dd>
-        <dt>Anthropic</dt><dd><code>POST /v1/messages</code> — claude-* → cc, gpt-* → api (перевод Anthropic→OpenAI)</dd>
-        <dt>OpenAI</dt><dd><code>POST /v1/chat/completions</code> — gpt-* → api напрямую, claude-* → cc (перевод OpenAI→Anthropic)</dd>
-        <dt>Модели</dt><dd><code>GET /v1/models</code> — объединённый список Claude + GPT</dd>
-        <dt>Авторизация</dt><dd>необязательна (любое значение; прокси подставляет реальный ключ из пула)</dd>
+        <dt>Anthropic</dt><dd><code>POST /v1/messages</code> — любая модель любого включённого провайдера</dd>
+        <dt>OpenAI</dt><dd><code>POST /v1/chat/completions</code> — любая модель любого включённого провайдера</dd>
+        <dt>Модели</dt><dd><code>GET /v1/models</code> — объединённый список всех включённых провайдеров</dd>
+        <dt>Указать провайдера</dt><dd><code>"model":"opencode/glm-5.2"</code> — префикс <code>provider/model</code> форсирует провайдера</dd>
+        <dt>Авторизация</dt><dd>необязательна (любое значение; прокси подставляет ключ из пула провайдера)</dd>
       </dl>
-
-      <h3>Управление пулом ключей</h3>
-<pre class="code"><span class="c"># список ключей (маскированы, со статусом и счётчиками)</span>
-<span class="k">GET</span> /api/keys
-→ { "total":2, "current":0, "keys":[{ "index":0, "masked":"fe_oa_1e…a242", "current":true, "ok":3, "bad":false, "count":3, "lastStatus":200 }] }
-
-<span class="c"># добавить один или несколько (персистится, дубликаты игнорируются)</span>
-<span class="k">POST</span> /api/keys        { "keys":["fe_oa_…","fe_oa_…"] }
-
-<span class="c"># удалить по индексу или по точному ключу</span>
-<span class="k">DELETE</span> /api/keys     { "index":0 }   <span class="c"># или { "key":"fe_oa_…" }</span>
-
-<span class="c"># проб по порядку, залочиться на первом рабочем</span>
-<span class="k">POST</span> /api/keys/find   {}</pre>
-
-      <h3>Профиль (вкл / выкл)</h3>
-<pre class="code"><span class="k">GET</span>  /api/profile
-<span class="k">PUT</span>  /api/profile    { "enabled": false, "name": "FreeModel", "note": "…" }
-<span class="c"># отключить: /v1/* → 503, UI и /api/* остаются</span></pre>
-
-      <h3>Fingerprint</h3>
-<pre class="code"><span class="k">GET</span> /api/fingerprint
-<span class="k">PUT</span> /api/fingerprint   { "userAgent":"…", "anthropicBeta":"…", "billingHeader":"…", "agentHeader":"…" }</pre>
-
-      <h3>Клиенты — подключение</h3>
-<pre class="code"><span class="c"># Factory Droid (~/.factory/settings.json customModels, + FACTORY_AIRGAP_ENABLED=1)</span>
-{ "model":"claude-opus-4-8", "baseUrl":"http://127.0.0.1:11440", "apiKey":"dummy",
-  "provider":"anthropic", "maxOutputTokens":16384 }
-
-<span class="c"># Claude Code</span>
-export ANTHROPIC_BASE_URL=http://127.0.0.1:11440
-export ANTHROPIC_API_KEY=dummy
-claude "…"
-
+      <h3>Провайдеры</h3>
+<pre class="code"><span class="k">GET</span> /api/providers
+<span class="k">PUT</span> /api/providers/&lt;id&gt;   { "enabled": false }   <span class="c"># выключить конкретный (единственный переключатель)</span>
+<span class="k">POST</span> /api/providers    { "id","kind":"openai-compat","baseUrl","name" }
+<span class="k">DELETE</span> /api/providers/&lt;id&gt;</pre>
+      <h3>Ключи (per-provider)</h3>
+<pre class="code"><span class="k">GET</span>    /api/keys?provider=opencode
+<span class="k">POST</span>   /api/keys?provider=opencode   { "keys":["sk-…","sk-…"] }
+<span class="k">DELETE</span> /api/keys?provider=opencode   { "index":0 }
+<span class="k">POST</span>   /api/keys/reset?provider=opencode   <span class="c"># сбросить bad/limited метки (0 запросов)</span></pre>
+      <p class="hint">Статусы ключей формируются от <b>реальных</b> запросов: 401→битый, 429→лимит, 200→ok. Прокси не делает proactive-проверок — это экономит токены.</p>
+      <h3>Клиенты</h3>
+<pre class="code"><span class="c"># Claude Code (Anthropic)</span>
+export ANTHROPIC_BASE_URL=http://127.0.0.1:11440 ANTHROPIC_API_KEY=dummy; claude "…"
+<span class="c"># OpenAI SDK / Cursor / Cline (OpenAI) — любая модель</span>
+base_url=http://127.0.0.1:11440/v1  api_key=dummy  model=glm-5.2   <span class="c"># или claude-opus-4-8 / gpt-5.4-mini</span>
 <span class="c"># Pi CLI (~/.pi/agent/models.json)</span>
-{ "providers":{ "freemodel":{ "baseUrl":"http://127.0.0.1:11440",
-  "api":"anthropic-messages", "apiKey":"dummy",
-  "models":[{ "id":"claude-opus-4-8", "reasoning":true, "input":["text","image"] }] } } }
-
-<span class="c"># OpenAI SDK / Cursor / Cline (OpenAI-протокол, любая модель)</span>
-base_url=http://127.0.0.1:11440/v1  api_key=dummy  model=gpt-5.4-mini <span class="c"># или claude-opus-4-8</span></pre>
-
-      <h3>CLI ключей</h3>
-<pre class="code">node keys.js add fe_oa_…      <span class="c"># добавить</span>
-node keys.js                   <span class="c"># список</span>
-node keys.js rm 0              <span class="c"># удалить по индексу</span>
-node keys.js status            <span class="c"># сводка</span></pre>
-
-      <p class="hint" style="margin-top:22px">Модели Claude: <code>claude-opus-4-8</code> · <code>claude-opus-4-7</code> · <code>claude-sonnet-4-6</code> · <code>claude-opus-4-6</code> · <code>claude-haiku-4-5-20251001</code> · <code>claude-fable-5</code>. GPT: <code>gpt-5.5</code> · <code>gpt-5.4</code> · <code>gpt-5.4-mini</code> · <code>gpt-5.3-codex</code>.</p>
+{ "providers":{ "fm":{ "baseUrl":"http://127.0.0.1:11440", "api":"anthropic-messages", "apiKey":"dummy", "models":[{ "id":"claude-opus-4-8" }] } } }</pre>
+      <h3>CLI</h3>
+<pre class="code">node keys.js add sk-…        <span class="c"># добавить в активный провайдер</span>
+node keys.js                 <span class="c"># список</span>
+node keys.js rm 0            <span class="c"># удалить по индексу</span>
+node keys.js reset           <span class="c"># сбросить метки</span></pre>
     </div>
   </details>
 
-  <footer class="foot">
-    <span>freemodel-cc-proxy · локальный LLM-шлюз</span>
-    <span class="mono" id="footBase">http://127.0.0.1:11440</span>
-  </footer>
+  <footer class="foot"><span>freemodel-cc-proxy · локальный LLM-шлюз</span><span class="mono" id="footBase">http://127.0.0.1:11440</span></footer>
 </main>
 
 <script>
 (function(){
   "use strict";
-  const $ = (s) => document.querySelector(s);
-  const $$ = (s) => Array.prototype.slice.call(document.querySelectorAll(s));
-  let proto = "openai";
-  let ALL_MODELS = [];
-  let PROFILE = {};
-  const isClaude = (id) => /^claude/i.test(id || "");
-  const isGpt = (id) => /^gpt-/i.test(id || "") || /gpt-5/i.test(id || "");
-  async function json(u, o){ const r = await fetch(u, o); return [r.status, await r.json().catch(() => ({}))]; }
-  const tnum = (n) => (n == null ? "—" : Number(n).toLocaleString("ru-RU"));
+  const $ = (s, r) => (r || document).querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+  const tnum = (n) => (n == null ? "—" : Number(n).toLocaleString("ru-RU"));
+  const J = async (u, o) => { const r = await fetch(u, o); return [r.status, await r.json().catch(() => ({}))]; };
+  const isClaude = (id) => /^claude/i.test(id || "");
+  const isGpt = (id) => /^gpt-/i.test(id || "");
+  const KIND_HUMAN = { "freemodel": "FreeModel · Claude + GPT через fingerprint", "openai-compat": "OpenAI-compatible · один endpoint" };
+  let PROVS = [];
+  const STATE = {}; // pid -> { models:[], proto:'openai' }
 
-  /* ── reveal ── */
+  const $$ = (s, r) => Array.prototype.slice.call((r || document).querySelectorAll(s));
   if ("IntersectionObserver" in window){
-    const io = new IntersectionObserver((es) => {
-      es.forEach((e) => { if (e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target); } });
-    }, { threshold:0.06, rootMargin:"0px 0px -6% 0px" });
-    $$(".reveal").forEach((el) => io.observe(el));
-  } else {
-    $$(".reveal").forEach((el) => el.classList.add("in"));
+    const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold:0.06 });
+    new MutationObserver(() => $$(".reveal").forEach((el) => io.observe(el))).observe(document.body, { childList:true, subtree:true });
   }
 
-  /* ── status ── */
   async function status(){
-    const [s, d] = await json("/api/status");
-    const badge = $("#badge"), pulse = $("#pulse");
-    if (s === 200 && d.ok){
-      pulse.classList.remove("err"); pulse.classList.add("ok");
-      badge.classList.remove("err","off"); badge.textContent = "работает";
-      $("#mStatus").textContent = "жив";
-      $("#mUp").textContent = "uptime " + d.uptime_s + "s";
-      $("#ver").textContent = "v" + (d.version || "");
-      $("#mKeys").textContent = tnum(d.keys.total);
-      $("#mKeyActive").textContent = "текущий #" + d.keys.current;
-      $("#mActive").textContent = d.keys.currentMasked || "—";
-      for (const id of ["docBase","docBase2","diagBase","footBase"]) if ($(id)) $(id).textContent = location.origin;
-      if (d.activeProvider){
-        const ap = d.activeProvider;
-        if ($("#upClaude")) $("#upClaude").textContent = ap.claudeUpstream || "—";
-        if ($("#upOpenai")) $("#upOpenai").textContent = ap.openaiUpstream || "—";
-        if ($("#upBase")) $("#upBase").textContent = ap.baseUrl || "—";
-        if ($("#provKind")) $("#provKind").textContent = ap.kind || "—";
-        if ($("#keysProvName")) $("#keysProvName").textContent = ap.name || "—";
-        if ($("#addkeyPrefix")) $("#addkeyPrefix").textContent = (ap.kind === "freemodel" ? "fe_oa_…" : "sk-…");
-        const ak = $("#addkey"); if (ak && !ak.value) ak.setAttribute("placeholder", (ap.kind === "freemodel" ? "fe_oa_…\nfe_oa_…" : "sk-…\nsk-…"));
-        if ($("#diagUpClaude")) $("#diagUpClaude").textContent = ap.claudeUpstream || ap.baseUrl || "—";
-        if ($("#diagUpGpt")) $("#diagUpGpt").textContent = ap.openaiUpstream || ap.baseUrl || "—";
-        // fingerprint card only meaningful for fingerprint-gated providers
-        const fpCard = document.getElementById("fpCard") || document.querySelector("#fpSave").closest(".block");
-        if (fpCard) fpCard.hidden = !ap.needsFingerprint;
-      }
-      if (d.providers) renderProviderSelect(d.providers, d.activeId);
-      if (d.activeProvider) applyProfile({ id: d.activeId, name: d.activeProvider.name, enabled: d.enabled, note: "", activeProvider: d.activeProvider });
-      if (d.fingerprint && $("#fpCaptured")) $("#fpCaptured").textContent = d.fingerprint.capturedFrom || "—";
-      if ($("#devId")) $("#devId").textContent = d.device_id || "—";
-      if ($("#sesId")) $("#sesId").textContent = d.session_id || "—";
-    } else {
-      pulse.classList.remove("ok"); pulse.classList.add("err");
-      badge.classList.add("err"); badge.textContent = "недоступен";
-      $("#mStatus").textContent = "—";
-    }
+    const [s, d] = await J("/api/status");
+    const b = $("#badge"), p = $("#pulse");
+    if (s === 200 && d.ok){ p.classList.remove("err"); p.classList.add("ok"); b.classList.remove("err"); b.textContent = "работает"; $("#ver").textContent = "v" + (d.version || ""); }
+    else { p.classList.remove("ok"); p.classList.add("err"); b.classList.add("err"); b.textContent = "недоступен"; }
+    for (const id of ["docBase","docBase2","footBase"]) if ($(id)) $(id).textContent = location.origin;
   }
 
-  /* ── providers ── */
-  let ACTIVE_PROVIDER = null;
-  function renderProviderSelect(providers, activeId){
-    const sel = $("#providerSelect"); if (!sel) return;
-    const cur = sel.value;
-    sel.innerHTML = "";
-    providers.forEach((p) => {
-      const o = document.createElement("option");
-      o.value = p.id; o.textContent = p.name + " (" + p.keys + "k)"; sel.append(o);
+  async function loadProviders(){
+    const [s, d] = await J("/api/providers");
+    if (s !== 200) return;
+    PROVS = d.providers || [];
+    renderProvRow();
+  }
+
+  function renderProvRow(){
+    const row = $("#provRow"); row.innerHTML = "";
+    PROVS.forEach((p) => {
+      const on = p.enabled !== false;
+      const card = document.createElement("div");
+      card.className = "prov-card reveal" + (on ? "" : " off"); card.id = "pcard-" + p.id;
+      const addr = p.kind === "freemodel" ? (p.claudeUpstream + " · " + p.openaiUpstream) : (p.baseUrl || "—");
+      card.innerHTML =
+        '<div class="ptop"><div><h3 class="pname">' + esc(p.name) + '</h3>' +
+        '<div class="pkind">' + esc(KIND_HUMAN[p.kind] || p.kind) + '</div></div>' +
+        '<div class="ptoggle" id="tog-' + p.id + '" role="switch" aria-checked="' + on + '" tabindex="0" aria-label="Включить/выключить ' + esc(p.name) + '">' +
+          '<span class="trk"><span class="kb"></span></span><span class="stt" id="stt-' + p.id + '">' + (on ? "ON" : "OFF") + '</span></div></div>' +
+        '<p class="pnote">' + esc(p.note || "—") + '</p>' +
+        '<div class="pstats"><span>моделей: <b id="mcount-' + p.id + '">' + (p.models ? p.models.length : 0) + '</b></span>' +
+        '<span>ключей: <b id="kcount-' + p.id + '">—</b></span>' +
+        '<span>статус: <b id="kstat-' + p.id + '">—</b></span></div>' +
+        '<div class="paddr">' + esc(addr) + '</div>' +
+        '<div class="pact"><button class="btn ghost" id="expand-' + p.id + '">Ключи и модели</button>' +
+        (p.kind === "freemodel" ? '<button class="btn ghost" id="fpbtn-' + p.id + '">Fingerprint</button>' : '') + '</div>';
+      row.append(card);
+      const tog = $("#tog-" + p.id);
+      tog.onclick = () => toggleProv(p.id);
+      tog.onkeydown = (e) => { if (e.key === " " || e.key === "Enter"){ e.preventDefault(); tog.click(); } };
+      $("#expand-" + p.id).onclick = () => toggleSpace(p.id);
+      const fpb = $("#fpbtn-" + p.id); if (fpb) fpb.onclick = () => toggleFp(p.id);
     });
-    sel.value = (activeId && providers.some((p) => p.id === activeId)) ? activeId : (cur || (providers[0] && providers[0].id));
-  }
-  $("#providerSelect").addEventListener("change", async () => {
-    const id = $("#providerSelect").value;
-    const [s, d] = await json("/api/providers/active", { method:"PUT", headers:{ "content-type":"application/json" }, body: JSON.stringify({ id }) });
-    if (s === 200){ status(); models(); refreshLogs(); refreshKeys(); loadFp(); }
-  });
-
-  /* ── profile ── */
-  async function loadProfile(){
-    const [s, d] = await json("/api/profile");
-    if (s === 200) { applyProfile({ id: d.activeId, name: d.name, enabled: d.enabled, note: "" }); if (d.providers) renderProviderSelect(d.providers, d.activeId); }
-  }
-  function applyProfile(p){
-    if (!p) return;
-    PROFILE = p;
-    const on = !!p.enabled;
-    const tg = $("#profileToggle");
-    if (tg){ tg.setAttribute("aria-checked", String(on)); }
-    if ($("#profileState")) $("#profileState").textContent = on ? "ON" : "OFF";
-    if ($("#profileLbl")) $("#profileLbl").textContent = p.name || "FreeModel";
-    if ($("#heroTitle")) $("#heroTitle").textContent = p.name || "FreeModel";
-    if (p.note != null && $("#profileNote")) $("#profileNote").textContent = p.note || "—";
-    if ($("#profileId")) $("#profileId").textContent = p.id || "—";
-    const pill = $("#heroStatePill");
-    if (pill){ pill.textContent = on ? "включён" : "отключён"; pill.classList.toggle("off", !on); }
-    if ($("#profileNameInput")) $("#profileNameInput").value = p.name || "";
-    if ($("#profileNoteInput")) $("#profileNoteInput").value = p.note || "";
-    const run = $("#run"); if (run) run.disabled = !on;
-  }
-  $("#profileToggle").addEventListener("click", async () => {
-    const cur = $("#profileToggle").getAttribute("aria-checked") === "true";
-    const [s, d] = await json("/api/profile", { method:"PUT", headers:{ "content-type":"application/json" }, body: JSON.stringify({ enabled: !cur }) });
-    if (s === 200) applyProfile(d.profile);
-  });
-  $("#profileToggle").addEventListener("keydown", (e) => {
-    if (e.key === " " || e.key === "Enter"){ e.preventDefault(); $("#profileToggle").click(); }
-  });
-
-  /* ── profile edit (edits the ACTIVE provider via /api/providers/<id>) ── */
-  $("#editProfileBtn").addEventListener("click", () => {
-    const e = $("#profileEdit"), btn = $("#editProfileBtn");
-    e.hidden = !e.hidden;
-    btn.setAttribute("aria-expanded", String(!e.hidden));
-    if (!e.hidden){ $("#profileNameInput").focus(); }
-  });
-  $("#profileSave").addEventListener("click", async () => {
-    const id = $("#profileId").textContent.trim();
-    const body = { name: $("#profileNameInput").value.trim(), note: $("#profileNoteInput").value.trim() };
-    const [s, d] = await json("/api/providers/" + encodeURIComponent(id), { method:"PUT", headers:{ "content-type":"application/json" }, body: JSON.stringify(body) });
-    const m = $("#profileMsg");
-    if (s === 200){ status(); m.textContent = "сохранено"; $("#profileEdit").hidden = true; $("#editProfileBtn").setAttribute("aria-expanded","false"); }
-    else m.textContent = "ошибка: " + JSON.stringify(d);
-    setTimeout(() => { m.textContent = ""; }, 3200);
-  });
-
-  /* ── models ── */
-  async function models(){
-    const [st, dd] = await json("/api/status");
-    if (st === 200 && dd.activeProvider){
-      if ($("#modelsProvName")) $("#modelsProvName").textContent = dd.activeProvider.name;
-      if ($("#modelsProvKind")) $("#modelsProvKind").textContent = dd.activeProvider.kind;
-    }
-    const [s, d] = await json("/v1/models");
-    ALL_MODELS = (d.data || []).map((m) => m.id);
-    const ul = $("#modelsList"); if (ul) ul.innerHTML = "";
-    if (!ALL_MODELS.length && ul) ul.innerHTML = '<li class="muted">модели не пришли (проверьте ключи провайдера)</li>';
-    ALL_MODELS.forEach((id) => {
-      const li = document.createElement("li");
-      li.className = isClaude(id) ? "claude" : (isGpt(id) ? "gpt" : "other"); li.textContent = id; ul.append(li);
-    });
-    renderModelSelect();
-  }
-  function renderModelSelect(){
-    const sel = $("#model"); const prev = sel.value; sel.innerHTML = "";
-    // Show the full matrix: any model under any protocol. The backend already
-    // translates claude⇄gpt across protocols, so OpenAI+claude-* and
-    // Anthropic+gpt-* are valid and worth testing.
-    const list = ALL_MODELS.slice();
-    list.forEach((id) => { const o = document.createElement("option"); o.value = id; o.textContent = id; sel.append(o); });
-    if (prev && list.includes(prev)) sel.value = prev;
-    $("#modelHint").textContent = list.length ? "(" + list.length + ")" : "(нет моделей)";
+    // build spaces (hidden by default)
+    let spaces = $("#spaces"); if (!spaces){ spaces = document.createElement("div"); spaces.id = "spaces"; $("#provRow").after(spaces); }
+    spaces.innerHTML = "";
+    PROVS.forEach((p) => spaces.append(buildSpace(p)));
+    PROVS.forEach((p) => { loadKeys(p.id); if (p.kind === "freemodel") loadFp(p.id); });
   }
 
-  /* ── test ── */
-  async function test(){
-    const out = $("#testOut");
-    if (!$("#model").value){ out.innerHTML = '<span class="err">нет моделей для этого протокола</span>'; return; }
-    out.textContent = "…";
-    const [s, d] = await json("/api/test", { method:"POST", headers:{ "content-type":"application/json" },
-      body: JSON.stringify({ model: $("#model").value, prompt: $("#prompt").value, proto }) });
-    const head = (d.proto || "?") + " → " + (d.path || "") + (d.upstream ? " · upstream: " + d.upstream : "") + " · HTTP " + (d.status || s);
-    if (d.ok) out.innerHTML = '<div class="meta">' + esc(head) + '</div><div class="ok">' + esc(d.raw) + '</div>';
-    else out.innerHTML = '<div class="meta">' + esc(head) + '</div><div class="err">' + esc(d.raw || d.error || JSON.stringify(d)) + '</div>';
-    refreshLogs();
+  function buildSpace(p){
+    const sp = document.createElement("div");
+    sp.className = "pspace"; sp.id = "space-" + p.id; sp.hidden = true;
+    sp.innerHTML =
+      '<h3>Ключи — ' + esc(p.name) + '</h3>' +
+      '<p class="sub">Слив по порядку, авто-ротация на 401 / 403 / 429. 5xx не сжигает пул. Статусы — от реальных запросов.</p>' +
+      '<div id="ktbl-' + p.id + '"><div class="empty">загрузка…</div></div>' +
+      '<div class="legend"><span class="kstatus cur">активен</span><span class="kstatus ok">ok</span><span class="kstatus bad">битый</span><span class="kstatus lim">лимит</span><span class="kstatus idle">не использовался</span></div>' +
+      '<div class="keyadd"><input id="kadd-' + p.id + '" placeholder="' + esc((p.keyPrefix || "") + "… один или несколько через пробел") + '"></div>' +
+      '<div class="row" style="margin-top:10px"><button class="btn" id="kaddbtn-' + p.id + '">Добавить</button>' +
+      '<button class="btn ghost" id="kreset-' + p.id + '">Сбросить метки</button>' +
+      '<span class="toast" id="kmsg-' + p.id + '"></span></div>' +
+      '<h3 style="margin-top:22px">Модели</h3><p class="sub">Любая из них доступна под любым протоколом — прокси переводит сам.</p>' +
+      '<div class="models-wrap" id="mlist-' + p.id + '"><span class="mtag">загрузка…</span></div>' +
+      '<h3 style="margin-top:22px">Тест</h3><p class="sub">Реальный путь бэкенда: протокол × любая модель этого провайдера.</p>' +
+      '<div class="seg" role="tablist"><button id="po-' + p.id + '" aria-pressed="true">OpenAI</button><button id="pa-' + p.id + '" aria-pressed="false">Anthropic</button></div>' +
+      '<div class="testrow"><select id="tm-' + p.id + '"></select><textarea id="tp-' + p.id + '">Ответь ровно одним словом: ok</textarea>' +
+      '<button class="btn" id="tr-' + p.id + '">Отправить</button></div>' +
+      '<div class="testout" id="to-' + p.id + '"><span class="meta">Здесь появится ответ.</span></div>' +
+      (p.kind === "freemodel" ? buildFp(p) : "");
+    // wire
+    $("#kaddbtn-" + p.id, sp).onclick = () => addKeys(p.id);
+    $("#kreset-" + p.id, sp).onclick = () => resetMarks(p.id);
+    $("#po-" + p.id, sp).onclick = () => setProto(p.id, "openai");
+    $("#pa-" + p.id, sp).onclick = () => setProto(p.id, "anthropic");
+    $("#tr-" + p.id, sp).onclick = () => runTest(p.id);
+    STATE[p.id] = { models: p.models || [], proto: "openai" };
+    renderModelOptions(p.id);
+    return sp;
+  }
+  function buildFp(p){
+    return '<div id="fpbox-' + p.id + '" hidden><h3 style="margin-top:22px">Fingerprint (Claude Code)</h3>' +
+      '<p class="sub">Значения для прохода гейта cc.freemodel.dev. Применяются live.</p>' +
+      '<div class="fpgrid"><div><label>User-Agent</label><input id="fpUA-' + p.id + '"></div>' +
+      '<div><label>anthropic-beta</label><input id="fpBeta-' + p.id + '"></div>' +
+      '<div><label>billing-header</label><input id="fpBill-' + p.id + '"></div>' +
+      '<div><label>agent-header</label><input id="fpAgent-' + p.id + '"></div></div>' +
+      '<div class="row" style="margin-top:10px"><button class="btn" id="fps-' + p.id + '">Сохранить</button><span class="toast" id="fpm-' + p.id + '"></span></div></div>';
+  }
+  function toggleSpace(id){ const s = $("#space-" + id); s.hidden = !s.hidden; }
+  function toggleFp(id){ const f = $("#fpbox-" + id); if (f){ f.hidden = !f.hidden; if (!f.hidden) loadFp(id); } }
+  function toggleProv(id){
+    const cur = $("#tog-" + id).getAttribute("aria-checked") === "true";
+    J("/api/providers/" + encodeURIComponent(id), { method:"PUT", headers:{ "content-type":"application/json" }, body: JSON.stringify({ enabled: !cur }) })
+      .then(([s]) => { if (s === 200) loadProviders(); });
+  }
+  function setProto(id, proto){
+    STATE[id].proto = proto;
+    $("#po-" + id).setAttribute("aria-pressed", String(proto === "openai"));
+    $("#pa-" + id).setAttribute("aria-pressed", String(proto === "anthropic"));
+  }
+  function renderModelOptions(id){
+    const sel = $("#tm-" + id); if (!sel) return; sel.innerHTML = "";
+    STATE[id].models.forEach((m) => { const o = document.createElement("option"); o.value = m; o.textContent = m; sel.append(o); });
   }
 
-  /* ── keys ── */
-  async function refreshKeys(){
-    const [s, d] = await json("/api/keys"); if (s !== 200) return;
-    const el = $("#keys");
-    const cur = (d.keys || []).find((k) => k.current);
-    $("#mActiveReq").textContent = "запросов: " + (cur ? cur.count : 0);
+  async function loadKeys(id){
+    const [s, d] = await J("/api/keys?provider=" + encodeURIComponent(id));
+    const kc = $("#kcount-" + id); if (kc) kc.textContent = tnum(d.total);
+    if (s !== 200) return;
+    // summary stat
+    let bad = 0, lim = 0, okc = 0; (d.keys || []).forEach((k) => { if (k.bad) bad++; else if (k.limited) lim++; else if (k.ok) okc++; });
+    const ks = $("#kstat-" + id); if (ks) ks.textContent = (okc ? okc + " ok" : "—") + (lim ? " · " + lim + " лимит" : "") + (bad ? " · " + bad + " битых" : "");
+    const el = $("#ktbl-" + id); if (!el) return;
     if (!d.keys || !d.keys.length){ el.innerHTML = '<div class="empty">ключей нет — добавьте ниже</div>'; return; }
-    let h = '<table><thead><tr><th></th><th>#</th><th>ключ</th><th>статус</th><th>last</th><th>запр.</th><th></th></tr></thead><tbody>';
+    let h = '<table class="keytable"><thead><tr><th></th><th>#</th><th>ключ</th><th>статус</th><th>last</th><th>запр.</th><th></th></tr></thead><tbody>';
     for (const k of d.keys){
       let st;
-      if (k.bad) st = '<span class="st bad">битый</span>';
-      else if (k.limited) st = '<span class="st lim">лимит×' + k.limited + '</span>';
-      else if (k.ok) st = '<span class="st ok">ok×' + k.ok + '</span>';
-      else if (k.current) st = '<span class="st cur">активен</span>';
-      else st = '<span class="st idle">простой</span>';
-      h += '<tr class="' + (k.current ? "cur" : "") + '"><td class="star">' + (k.current ? "★" : "·") + '</td>'
-        + '<td class="idx">' + k.index + '</td><td class="keycell">' + esc(k.masked) + '</td><td>' + st + '</td>'
-        + '<td class="n">' + (k.lastStatus || "—") + '</td><td class="n">' + tnum(k.count) + '</td>'
-        + '<td><button class="del" data-i="' + k.index + '" aria-label="удалить ключ ' + esc(k.masked) + '">rm</button></td></tr>';
+      if (k.bad) st = '<span class="kstatus bad">битый</span>';
+      else if (k.limited) st = '<span class="kstatus lim">лимит×' + k.limited + '</span>';
+      else if (k.ok) st = '<span class="kstatus ok">ok×' + k.ok + '</span>';
+      else if (k.current) st = '<span class="kstatus cur">активен</span>';
+      else st = '<span class="kstatus idle">—</span>';
+      h += '<tr class="' + (k.current ? "cur" : "") + '"><td class="star">' + (k.current ? "★" : "") + '</td>' +
+        '<td class="idx">' + k.index + '</td><td class="kcell">' + esc(k.masked) + '</td><td>' + st + '</td>' +
+        '<td>' + (k.lastStatus || "—") + '</td><td>' + tnum(k.count) + '</td>' +
+        '<td><button class="kbtn del" data-i="' + k.index + '">удалить</button></td></tr>';
     }
     h += '</tbody></table>'; el.innerHTML = h;
-    el.querySelectorAll(".del").forEach((b) => b.onclick = async () => {
-      await json("/api/keys", { method:"DELETE", headers:{ "content-type":"application/json" }, body: JSON.stringify({ index: parseInt(b.dataset.i, 10) }) });
-      refreshKeys();
+    $$("#ktbl-" + id + " .del").forEach((b) => b.onclick = async () => {
+      await J("/api/keys?provider=" + encodeURIComponent(id), { method:"DELETE", headers:{ "content-type":"application/json" }, body: JSON.stringify({ index: parseInt(b.dataset.i, 10) }) });
+      loadKeys(id);
     });
   }
-  async function addKeys(){
-    const ta = $("#addkey"); const raw = ta.value.trim(); if (!raw) return;
+  async function addKeys(id){
+    const inp = $("#kadd-" + id); const raw = inp.value.trim(); if (!raw) return;
     const keys = raw.split(/[\s,]+/).filter((x) => x);
-    const [s, d] = await json("/api/keys", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ keys }) });
-    const m = $("#addMsg");
-    m.textContent = (s === 200) ? ("добавлено " + d.added + ", всего " + d.total) : ("ошибка: " + JSON.stringify(d));
-    if (s === 200) ta.value = "";
-    setTimeout(() => { m.textContent = ""; }, 3200); refreshKeys();
+    const [s, d] = await J("/api/keys?provider=" + encodeURIComponent(id), { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ keys }) });
+    const m = $("#kmsg-" + id); m.textContent = (s === 200) ? ("добавлено " + d.added + ", всего " + d.total) : ("ошибка: " + JSON.stringify(d));
+    if (s === 200) inp.value = "";
+    setTimeout(() => { m.textContent = ""; }, 3000); loadKeys(id);
   }
-  async function findWorking(){
-    const m = $("#addMsg"); m.textContent = "пробую…";
-    const [s, d] = await json("/api/keys/find", { method:"POST" });
-    if (d.ok) m.textContent = "залочен на #" + d.current + " " + d.masked + " (" + d.probed + " проб)";
-    else m.textContent = "рабочих ключей нет (" + (d.probed || 0) + " проб)";
-    setTimeout(() => { m.textContent = ""; }, 4200); refreshKeys();
+  async function resetMarks(id){
+    const [s] = await J("/api/keys/reset?provider=" + encodeURIComponent(id), { method:"POST" });
+    const m = $("#kmsg-" + id); m.textContent = (s === 200) ? "метки сброшены — ключи перепроверятся на реальных запросах" : "ошибка";
+    setTimeout(() => { m.textContent = ""; }, 3000); loadKeys(id);
+  }
+  async function runTest(id){
+    const out = $("#to-" + id); const model = $("#tm-" + id).value;
+    if (!model){ out.innerHTML = '<span class="err">нет моделей — включите провайдера</span>'; return; }
+    out.textContent = "…";
+    const [s, d] = await J("/api/test", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ model, prompt: $("#tp-" + id).value, proto: STATE[id].proto }) });
+    const head = (d.proto || "?") + " → " + (d.path || "") + (d.upstream ? " · " + d.upstream : "") + (d.provider ? " · " + d.provider : "") + " · HTTP " + (d.status || s);
+    out.innerHTML = d.ok ? '<div class="meta">' + esc(head) + '</div><div class="ok">' + esc(d.raw) + '</div>'
+                          : '<div class="meta">' + esc(head) + '</div><div class="err">' + esc(d.raw || d.error || JSON.stringify(d)) + '</div>';
+    refreshLogs(); loadKeys(id);
+  }
+  async function loadFp(id){
+    const [s, d] = await J("/api/fingerprint"); if (s !== 200) return;
+    const set = (k, v) => { const el = $("#" + k + "-" + id); if (el) el.value = v || ""; };
+    set("fpUA", d.userAgent); set("fpBeta", d.anthropicBeta); set("fpBill", d.billingHeader); set("fpAgent", d.agentHeader);
+    const fps = $("#fps-" + id); if (fps) fps.onclick = () => saveFp(id);
+  }
+  async function saveFp(id){
+    const get = (k) => ($("#" + k + "-" + id) || {}).value;
+    const body = { userAgent: (get("fpUA") || "").trim(), anthropicBeta: (get("fpBeta") || "").trim(), billingHeader: (get("fpBill") || "").trim(), agentHeader: (get("fpAgent") || "").trim() };
+    const [s, d] = await J("/api/fingerprint", { method:"PUT", headers:{ "content-type":"application/json" }, body: JSON.stringify(body) });
+    const m = $("#fpm-" + id); m.textContent = (s === 200) ? "применено" : ("ошибка: " + JSON.stringify(d));
+    setTimeout(() => { m.textContent = ""; }, 3000);
   }
 
-  /* ── logs ── */
   async function refreshLogs(){
-    const [s, d] = await json("/api/logs"); if (s !== 200) return;
+    const [s, d] = await J("/api/logs"); if (s !== 200) return;
     const el = $("#logs"); el.innerHTML = "";
     const logs = d.logs || [];
-    $("#mReq").textContent = tnum(logs.length);
-    if (logs[0]) $("#mReqLast").textContent = "last = " + (logs[0].status || "—");
-    logs.slice(0, 90).forEach((l) => {
+    logs.slice(0, 80).forEach((l) => {
       const st = (l.status || "").toString();
       const ln = document.createElement("div"); ln.className = "ln";
-      ln.innerHTML = '<span class="t">' + esc(l.ts) + '</span><span class="k">' + esc(l.kind) + '</span>'
-        + '<span class="p">' + esc(l.method + " " + l.path + (l.note ? " · " + l.note : "")) + '</span>'
-        + '<span class="st_' + st[0] + '">' + esc(st) + '</span>';
+      ln.innerHTML = '<span class="t">' + esc(l.ts) + '</span><span class="k">' + esc(l.kind) + '</span>' +
+        '<span class="p">' + esc(l.method + " " + l.path + (l.note ? " · " + l.note : "")) + '</span>' +
+        '<span class="st_' + st[0] + '">' + esc(st) + '</span>';
       el.append(ln);
     });
     if (!el.children.length){ const sp = document.createElement("div"); sp.className = "empty"; sp.textContent = "запросов пока нет"; el.append(sp); }
   }
-
-  /* ── fingerprint ── */
-  async function loadFp(){
-    const [s, d] = await json("/api/fingerprint"); if (s !== 200) return;
-    if ($("#fpFile")) $("#fpFile").textContent = d.profileFile || "—";
-    if ($("#fpCaptured")) $("#fpCaptured").textContent = d.capturedFrom || "—";
-    $("#fpUA").value = d.userAgent || "";
-    $("#fpBeta").value = d.anthropicBeta || "";
-    $("#fpBill").value = d.billingHeader || "";
-    $("#fpAgent").value = d.agentHeader || "";
-  }
-  async function saveFp(){
-    const body = { userAgent: $("#fpUA").value.trim(), anthropicBeta: $("#fpBeta").value.trim(),
-      billingHeader: $("#fpBill").value.trim(), agentHeader: $("#fpAgent").value.trim() };
-    const [s, d] = await json("/api/fingerprint", { method:"PUT", headers:{ "content-type":"application/json" }, body: JSON.stringify(body) });
-    const m = $("#fpMsg");
-    m.textContent = (s === 200) ? "применено" : ("ошибка: " + JSON.stringify(d));
-    setTimeout(() => { m.textContent = ""; }, 3600);
-  }
-
-  /* ── proto + wiring ── */
-  function setProto(p){
-    proto = p;
-    $("#protoOpenai").setAttribute("aria-pressed", String(p === "openai"));
-    $("#protoAnthropic").setAttribute("aria-pressed", String(p === "anthropic"));
-    renderModelSelect();
-  }
-  $("#protoOpenai").onclick = () => setProto("openai");
-  $("#protoAnthropic").onclick = () => setProto("anthropic");
-  $("#run").onclick = test;
-  $("#refresh").onclick = () => { status(); models(); refreshLogs(); refreshKeys(); };
-  $("#refreshTop").onclick = () => { status(); models(); refreshLogs(); refreshKeys(); loadFp(); };
   $("#refLogs").onclick = refreshLogs;
-  $("#addBtn").onclick = addKeys;
-  $("#findBtn").onclick = findWorking;
-  $("#fpSave").onclick = saveFp;
-  $("#fpReload").onclick = loadFp;
 
-  /* ── boot ── */
-  status(); models(); refreshLogs(); refreshKeys(); loadFp(); loadProfile();
-  setInterval(() => { refreshLogs(); refreshKeys(); status(); }, 5000);
+  // refresh model lists per provider from /v1/models (union) — assign by owned_by
+  async function refreshModels(){
+    const [s, d] = await J("/v1/models"); if (s !== 200) return;
+    const byProv = {}; (d.data || []).forEach((m) => { const pid = m.owned_by || "?"; (byProv[pid] = byProv[pid] || []).push(m.id); });
+    PROVS.forEach((p) => {
+      const ids = byProv[p.id] || [];
+      STATE[p.id].models = ids;
+      const mc = $("#mcount-" + p.id); if (mc) mc.textContent = ids.length;
+      const ml = $("#mlist-" + p.id); if (ml){ ml.innerHTML = ""; if (!ids.length){ ml.innerHTML = '<span class="mtag">нет моделей (включите провайдера / проверьте ключи)</span>'; }
+        ids.forEach((mid) => { const t = document.createElement("span"); t.className = "mtag " + (isClaude(mid) ? "claude" : isGpt(mid) ? "gpt" : "other"); t.textContent = mid; ml.append(t); }); }
+      renderModelOptions(p.id);
+    });
+  }
+
+  async function boot(){
+    await loadProviders();
+    status(); refreshLogs(); refreshModels();
+    setInterval(() => { status(); refreshLogs(); PROVS.forEach((p) => loadKeys(p.id)); }, 6000);
+    setInterval(refreshModels, 30000);
+  }
+  boot();
 })();
 </script>
 </body>

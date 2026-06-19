@@ -1,6 +1,6 @@
 {
   "name": "freemodel-cc-proxy",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Local Claude proxy over FreeModel's cc.freemodel.dev \u2014 Anthropic Messages API (/v1/messages) AND OpenAI Chat Completions API (/v1/chat/completions), streaming + non-streaming, for any client (Factory Droid, Claude Code, Cline, Cursor, Anthropic SDK, OpenAI SDK) by impersonating the official Claude Code request fingerprint.",
   "main": "index.js",
   "bin": {
@@ -15,6 +15,7 @@
     "node": ">=18"
   },
   "files": [
+    "providers/",
     "index.js",
     "keys.js",
     "ui.html",

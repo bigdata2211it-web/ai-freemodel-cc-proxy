@@ -24,7 +24,7 @@ const HELP = `freemodel-cc-proxy key pool manager
   keys.js              list keys
   keys.js add <key...> add key(s)
   keys.js rm <idx|key> remove by index or exact key
-  keys.js find        probe forward, lock onto the first working key
+  keys.js reset       clear bad/limited marks (no requests; keys re-evaluated lazily)
   keys.js status       pool summary
   keys.js current      show current (active) key, masked
 base: ${BASE} (override with FMCC_BASE)`;
@@ -68,14 +68,10 @@ base: ${BASE} (override with FMCC_BASE)`;
         console.log(`keys: ${d.keys.total} · current #${d.keys.current} (${d.keys.currentMasked})`);
         break;
       }
-      case "find":
-      case "probe": {
-        console.log("probing keys forward until first working…");
-        const [s, d] = await jsend("/api/keys/find", "POST", {});
+      case "reset": {
+        const [s, d] = await jsend("/api/keys/reset", "POST", {});
         if (s !== 200) { console.error("error", s, d); process.exit(1); }
-        for (const t of d.tried) console.log(`  #${t.index} ${t.masked} -> ${t.status}`);
-        if (d.ok) console.log(`found: #${d.current} ${d.masked}  (locked, ${d.probed} probe(s))`);
-        else console.log(`no working key found (${d.probed} probed).`);
+        console.log(`marks reset for ${d.provider} (${d.total} keys). They'll be re-evaluated by the next real request.`);
         break;
       }
       default:
