@@ -26,13 +26,36 @@ tool that talks either API.
 > models on `api.freemodel.dev` have no such gate. No binary patching, no token theft —
 > just request-shape normalization on your own machine, with your own key.
 
-## Profile & enable toggle
+## Multi-provider + enable toggle
 
-FreeModel is a **profile** — a named, toggleable provider config. The web UI has an
-ON/OFF switch in the header; `PUT /api/profile { "enabled": false }` does the same
-programmatically. When disabled, `/v1/*` returns `503 profile_disabled` with a clear
-message, while the UI and `/api/*` stay up so you can re-enable. State persists in
-`~/.freemodel-cc-proxy/profile.json`.
+The proxy fronts **multiple providers** and you switch the active one from the
+web UI (header selector) or the API. Each provider is a named LLM gateway with
+its own key pool. Two kinds:
+
+- **`freemodel`** — two upstream hosts (`cc.freemodel.dev` for `claude-*` with
+  the Claude Code fingerprint gate, `api.freemodel.dev` for `gpt-*`), `fe_oa_`
+  key pool.
+- **`openai-compat`** — one OpenAI-compatible baseUrl (e.g. **OpenCode Go** at
+  `https://opencode.ai/zen/go/v1`), `sk-` Bearer keys, any model id; `claude-*`
+  is served by translating Anthropic⇄OpenAI in the proxy.
+
+State persists in `~/.freemodel-cc-proxy/providers.json` + per-provider
+`keys-<id>.json`. A global enable toggle sits on top: when off, `/v1/*` (except
+`/v1/models`) returns `503 profile_disabled`; the UI and `/api/*` stay up.
+
+```bash
+GET  /api/providers                      # list + activeId
+PUT  /api/providers/active   { id }      # switch active provider
+POST /api/providers          { id, kind, baseUrl, name }   # add
+PUT  /api/providers/<id>     { name, note, baseUrl, ... }  # edit
+DELETE /api/providers/<id>                # remove
+GET/POST/DELETE /api/keys?provider=<id>   # per-provider key pool
+POST /api/keys/find?provider=<id>         # probe that provider's pool
+```
+
+The first run migrates the legacy single-provider layout (`keys.json` →
+`keys-freemodel.json`, `profile.json` upstreams → the freemodel provider) and
+seeds an `opencode` provider if `keys-opencode.json` exists.
 
 ## What it does
 
@@ -42,12 +65,16 @@ message, while the UI and `/api/*` stay up so you can re-enable. State persists 
 - `POST /v1/chat/completions` — OpenAI Chat Completions API (**streaming + non-streaming**,
   tool/function calling). `gpt-*` → forward as-is to `api.freemodel.dev`; `claude-*` →
   translate to Anthropic + fingerprint → `cc.freemodel.dev` → translate back.
-- `GET /v1/models` — merged list of both families (6 Claude + 4 GPT, OpenAI-shape).
-- `GET /` — web UI: profile toggle + **routing diagram**, metrics, model list, **key
-  pool**, fingerprint editor, live test panel (protocol × model), request log, docs.
-- `GET/PUT /api/profile` — read/toggle the profile.
+- `GET /v1/models` — models served by the **active** provider (freemodel: merged
+  Claude + GPT; openai-compat: one `/models` on baseUrl).
+- `GET /` — web UI: **provider selector** + enable toggle, routing diagram,
+  metrics, model list, per-provider **key pool**, fingerprint editor (shown only
+  for fingerprint-gated providers), live test panel (protocol × model), log, docs.
+- `GET/PUT /api/profile` — read/toggle enable + switch active provider (compat).
+- `GET/POST/DELETE /api/providers`, `/api/providers/active`, `/api/providers/<id>`.
 - `GET/PUT /api/fingerprint` — read/update the Claude Code fingerprint profile.
-- `GET/POST/DELETE /api/keys`, `POST /api/keys/find` — manage the key pool.
+- `GET/POST/DELETE /api/keys`, `POST /api/keys/find` — manage the **active**
+  provider's key pool (use `?provider=<id>` for another).
 
 > The FreeModel gate forces `stream:true` on every upstream request. So even when a
 > client asks for a single JSON object (`stream:false`, the Anthropic SDK default, or

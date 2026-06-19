@@ -101,6 +101,10 @@
   .ver{color:var(--ink-4);font-family:var(--mono);font-size:12px;font-feature-settings:var(--tnum)}
   .top-right{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-left:auto}
   .health{display:inline-flex;align-items:center;gap:9px}
+  .prov-sel{display:inline-flex;align-items:center;gap:8px}
+  .prov-sel-lbl{font:600 11px var(--sans);color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em}
+  .prov-sel select{font:600 13px var(--sans);background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:7px 11px;cursor:pointer;max-width:200px}
+  .prov-sel select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
   .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--ink-4)}
   .dot.ok{background:var(--ok);box-shadow:0 0 0 0 oklch(50% 0.13 150 / .5);animation:pulse 2.8s ease-out infinite}
   .dot.err{background:var(--err);animation:pulseE 2.2s ease-out infinite}
@@ -231,6 +235,7 @@
   ul.models li::before{content:"";width:5px;height:5px;border-radius:50%;flex:none;background:var(--ink-4)}
   ul.models li.claude::before{background:var(--claude)}
   ul.models li.gpt::before{background:var(--gpt)}
+  ul.models li.other::before{background:var(--accent)}
   ul.models li:last-child{border-bottom:0}
   ul.models li.muted{color:var(--ink-4);justify-content:center;padding:22px 0}
   ul.models li.muted::before{display:none}
@@ -347,7 +352,11 @@
       <span class="dot ok" id="pulse" aria-hidden="true"></span>
       <span class="badge" id="badge">проверка…</span>
     </span>
-    <div class="toggle" id="profileToggle" role="switch" aria-checked="true" tabindex="0" aria-label="Включить или отключить профиль провайдера">
+    <label class="prov-sel" for="providerSelect">
+      <span class="prov-sel-lbl">провайдер</span>
+      <select id="providerSelect" aria-label="Активный провайдер"></select>
+    </label>
+    <div class="toggle" id="profileToggle" role="switch" aria-checked="true" tabindex="0" aria-label="Включить или отключить профиль">
       <span class="lbl"><span id="profileLbl">FreeModel</span></span>
       <span class="track" aria-hidden="true"><span class="knob"></span></span>
       <span class="state" id="profileState">ON</span>
@@ -371,10 +380,12 @@
     </div>
 
     <dl class="hero-meta">
-      <span class="hm"><dt class="hk">id профиля</dt><dd class="hv" id="profileId">freemodel</dd></span>
+      <span class="hm"><dt class="hk">id</dt><dd class="hv" id="profileId">freemodel</dd></span>
+      <span class="hm"><dt class="hk">kind</dt><dd class="hv" id="provKind">—</dd></span>
       <span class="hm"><dt class="hk">базовый URL</dt><dd class="hv" id="docBase">http://127.0.0.1:11440</dd></span>
       <span class="hm"><dt class="hk">claude upstream</dt><dd class="hv" id="upClaude">—</dd></span>
       <span class="hm"><dt class="hk">openai upstream</dt><dd class="hv" id="upOpenai">—</dd></span>
+      <span class="hm"><dt class="hk">upstream baseUrl</dt><dd class="hv" id="upBase">—</dd></span>
     </dl>
 
     <div class="hero-actions">
@@ -458,21 +469,10 @@
   <!-- 3 · MODELS -->
   <section class="block reveal" aria-labelledby="modelsTitle">
     <p class="eyebrow">Каталог моделей</p>
-    <h2 class="section-title" id="modelsTitle">Два семейства — один эндпоинт</h2>
-    <p class="section-sub"><code>GET /v1/models</code> мержит оба хоста FreeModel: Claude с <span class="mono">cc.freemodel.dev</span> и GPT с <span class="mono">api.freemodel.dev</span>.</p>
-    <div class="families">
-      <div class="family claude">
-        <div class="family-head"><span class="pill claude">claude-*</span><span class="family-name">Claude</span></div>
-        <div class="family-host">cc.freemodel.dev · anthropic</div>
-        <p class="family-sub">Реальный Claude через хост Claude Code с fingerprint-гейтом.</p>
-        <ul class="models" id="modelsClaude"><li class="muted">загрузка…</li></ul>
-      </div>
-      <div class="family gpt">
-        <div class="family-head"><span class="pill gpt">gpt-*</span><span class="family-name">GPT</span></div>
-        <div class="family-host">api.freemodel.dev · freemodel</div>
-        <p class="family-sub">Прямой OpenAI Chat Completions, без fingerprint.</p>
-        <ul class="models" id="modelsGpt"><li class="muted">загрузка…</li></ul>
-      </div>
+    <h2 class="section-title" id="modelsTitle">Модели активного провайдера</h2>
+    <p class="section-sub"><code>GET /v1/models</code> — модели провайдера <span class="mono" id="modelsProvName">—</span> (<span class="mono" id="modelsProvKind">—</span>). Прокси переведёт любой протокол под любую модель.</p>
+    <div class="families" id="families">
+      <div class="family"><ul class="models" id="modelsList"><li class="muted">загрузка…</li></ul></div>
     </div>
   </section>
 
@@ -510,16 +510,16 @@
   <!-- 5 · KEY POOL -->
   <section class="block reveal" aria-labelledby="keysTitle">
     <p class="eyebrow">Пул ключей</p>
-    <h2 class="section-title" id="keysTitle">Последовательный слив с ротацией</h2>
-    <p class="section-sub">Ключи drain’ятся по порядку (<span class="mono">#1 → #2 → …</span>). На 401 / 402 / 429 / 5xx прокси молча переводит указатель вперёд и повторяет тот же запрос — клиент разрыва не видит.</p>
+    <h2 class="section-title" id="keysTitle">Ключи активного провайдера</h2>
+    <p class="section-sub">Ключи drain’ятся по порядку (<span class="mono">#1 → #2 → …</span>) для провайдера <span class="mono" id="keysProvName">—</span>. На 401 / 403 / 429 прокси переводит указатель вперёд и повторяет тот же запрос; 5xx не сжигает пул.</p>
     <div id="keys" style="margin-top:clamp(26px,3vw,38px)"><div class="empty">загрузка…</div></div>
     <div class="legend">
       <span class="st cur">активен</span><span class="st bad">битый (401)</span><span class="st lim">лимит</span><span class="st ok">ok</span><span class="st idle">простаивает</span>
     </div>
     <div class="key-add">
       <div>
-        <label for="addkey">Добавить ключи (<span class="mono">fe_oa_…</span>) — один или много, через пробел или перенос</label>
-        <textarea id="addkey" placeholder="fe_oa_…&#10;fe_oa_…"></textarea>
+        <label for="addkey">Добавить ключи (<span class="mono" id="addkeyPrefix">fe_oa_…</span>) — один или много, через пробел или перенос</label>
+        <textarea id="addkey" placeholder="…"></textarea>
       </div>
       <div class="row" style="flex-direction:column;align-items:stretch;gap:10px">
         <button class="btn" id="addBtn">Добавить</button>
@@ -530,7 +530,7 @@
   </section>
 
   <!-- 6 · FINGERPRINT -->
-  <section class="block reveal" aria-labelledby="fpTitle">
+  <section class="block reveal" id="fpCard" aria-labelledby="fpTitle">
     <p class="eyebrow">Профиль fingerprint</p>
     <h2 class="section-title" id="fpTitle">Имитация клиента Claude Code</h2>
     <p class="section-sub">Значения для прохождения гейта <span class="mono">cc.freemodel.dev</span>. Хранятся в файле, применяются live — без правки кода.</p>
@@ -678,13 +678,23 @@ node keys.js status            <span class="c"># сводка</span></pre>
       $("#mKeyActive").textContent = "текущий #" + d.keys.current;
       $("#mActive").textContent = d.keys.currentMasked || "—";
       for (const id of ["docBase","docBase2","diagBase","footBase"]) if ($(id)) $(id).textContent = location.origin;
-      if (d.upstreams){
-        if ($("#upClaude")) $("#upClaude").textContent = d.upstreams.claude || "—";
-        if ($("#upOpenai")) $("#upOpenai").textContent = d.upstreams.openai || "—";
-        if ($("#diagUpClaude")) $("#diagUpClaude").textContent = d.upstreams.claude || "—";
-        if ($("#diagUpGpt")) $("#diagUpGpt").textContent = d.upstreams.openai || "—";
+      if (d.activeProvider){
+        const ap = d.activeProvider;
+        if ($("#upClaude")) $("#upClaude").textContent = ap.claudeUpstream || "—";
+        if ($("#upOpenai")) $("#upOpenai").textContent = ap.openaiUpstream || "—";
+        if ($("#upBase")) $("#upBase").textContent = ap.baseUrl || "—";
+        if ($("#provKind")) $("#provKind").textContent = ap.kind || "—";
+        if ($("#keysProvName")) $("#keysProvName").textContent = ap.name || "—";
+        if ($("#addkeyPrefix")) $("#addkeyPrefix").textContent = (ap.kind === "freemodel" ? "fe_oa_…" : "sk-…");
+        const ak = $("#addkey"); if (ak && !ak.value) ak.setAttribute("placeholder", (ap.kind === "freemodel" ? "fe_oa_…\nfe_oa_…" : "sk-…\nsk-…"));
+        if ($("#diagUpClaude")) $("#diagUpClaude").textContent = ap.claudeUpstream || ap.baseUrl || "—";
+        if ($("#diagUpGpt")) $("#diagUpGpt").textContent = ap.openaiUpstream || ap.baseUrl || "—";
+        // fingerprint card only meaningful for fingerprint-gated providers
+        const fpCard = document.getElementById("fpCard") || document.querySelector("#fpSave").closest(".block");
+        if (fpCard) fpCard.hidden = !ap.needsFingerprint;
       }
-      if (d.profile) applyProfile(d.profile);
+      if (d.providers) renderProviderSelect(d.providers, d.activeId);
+      if (d.activeProvider) applyProfile({ id: d.activeId, name: d.activeProvider.name, enabled: d.enabled, note: "", activeProvider: d.activeProvider });
       if (d.fingerprint && $("#fpCaptured")) $("#fpCaptured").textContent = d.fingerprint.capturedFrom || "—";
       if ($("#devId")) $("#devId").textContent = d.device_id || "—";
       if ($("#sesId")) $("#sesId").textContent = d.session_id || "—";
@@ -695,22 +705,40 @@ node keys.js status            <span class="c"># сводка</span></pre>
     }
   }
 
+  /* ── providers ── */
+  let ACTIVE_PROVIDER = null;
+  function renderProviderSelect(providers, activeId){
+    const sel = $("#providerSelect"); if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = "";
+    providers.forEach((p) => {
+      const o = document.createElement("option");
+      o.value = p.id; o.textContent = p.name + " (" + p.keys + "k)"; sel.append(o);
+    });
+    sel.value = (activeId && providers.some((p) => p.id === activeId)) ? activeId : (cur || (providers[0] && providers[0].id));
+  }
+  $("#providerSelect").addEventListener("change", async () => {
+    const id = $("#providerSelect").value;
+    const [s, d] = await json("/api/providers/active", { method:"PUT", headers:{ "content-type":"application/json" }, body: JSON.stringify({ id }) });
+    if (s === 200){ status(); models(); refreshLogs(); refreshKeys(); loadFp(); }
+  });
+
   /* ── profile ── */
   async function loadProfile(){
     const [s, d] = await json("/api/profile");
-    if (s === 200) applyProfile(d);
+    if (s === 200) { applyProfile({ id: d.activeId, name: d.name, enabled: d.enabled, note: "" }); if (d.providers) renderProviderSelect(d.providers, d.activeId); }
   }
   function applyProfile(p){
     if (!p) return;
     PROFILE = p;
     const on = !!p.enabled;
     const tg = $("#profileToggle");
-    tg.setAttribute("aria-checked", String(on));
-    $("#profileState").textContent = on ? "ON" : "OFF";
-    $("#profileLbl").textContent = p.name || "FreeModel";
-    $("#heroTitle").textContent = p.name || "FreeModel";
-    $("#profileNote").textContent = p.note || "—";
-    $("#profileId").textContent = p.id || "—";
+    if (tg){ tg.setAttribute("aria-checked", String(on)); }
+    if ($("#profileState")) $("#profileState").textContent = on ? "ON" : "OFF";
+    if ($("#profileLbl")) $("#profileLbl").textContent = p.name || "FreeModel";
+    if ($("#heroTitle")) $("#heroTitle").textContent = p.name || "FreeModel";
+    if (p.note != null && $("#profileNote")) $("#profileNote").textContent = p.note || "—";
+    if ($("#profileId")) $("#profileId").textContent = p.id || "—";
     const pill = $("#heroStatePill");
     if (pill){ pill.textContent = on ? "включён" : "отключён"; pill.classList.toggle("off", !on); }
     if ($("#profileNameInput")) $("#profileNameInput").value = p.name || "";
@@ -726,7 +754,7 @@ node keys.js status            <span class="c"># сводка</span></pre>
     if (e.key === " " || e.key === "Enter"){ e.preventDefault(); $("#profileToggle").click(); }
   });
 
-  /* ── profile edit ── */
+  /* ── profile edit (edits the ACTIVE provider via /api/providers/<id>) ── */
   $("#editProfileBtn").addEventListener("click", () => {
     const e = $("#profileEdit"), btn = $("#editProfileBtn");
     e.hidden = !e.hidden;
@@ -734,26 +762,30 @@ node keys.js status            <span class="c"># сводка</span></pre>
     if (!e.hidden){ $("#profileNameInput").focus(); }
   });
   $("#profileSave").addEventListener("click", async () => {
+    const id = $("#profileId").textContent.trim();
     const body = { name: $("#profileNameInput").value.trim(), note: $("#profileNoteInput").value.trim() };
-    const [s, d] = await json("/api/profile", { method:"PUT", headers:{ "content-type":"application/json" }, body: JSON.stringify(body) });
+    const [s, d] = await json("/api/providers/" + encodeURIComponent(id), { method:"PUT", headers:{ "content-type":"application/json" }, body: JSON.stringify(body) });
     const m = $("#profileMsg");
-    if (s === 200){ applyProfile(d.profile); m.textContent = "сохранено"; $("#profileEdit").hidden = true; $("#editProfileBtn").setAttribute("aria-expanded","false"); }
+    if (s === 200){ status(); m.textContent = "сохранено"; $("#profileEdit").hidden = true; $("#editProfileBtn").setAttribute("aria-expanded","false"); }
     else m.textContent = "ошибка: " + JSON.stringify(d);
     setTimeout(() => { m.textContent = ""; }, 3200);
   });
 
   /* ── models ── */
   async function models(){
+    const [st, dd] = await json("/api/status");
+    if (st === 200 && dd.activeProvider){
+      if ($("#modelsProvName")) $("#modelsProvName").textContent = dd.activeProvider.name;
+      if ($("#modelsProvKind")) $("#modelsProvKind").textContent = dd.activeProvider.kind;
+    }
     const [s, d] = await json("/v1/models");
     ALL_MODELS = (d.data || []).map((m) => m.id);
-    const cl = $("#modelsClaude"), gp = $("#modelsGpt");
-    cl.innerHTML = ""; gp.innerHTML = "";
-    const claudeIds = ALL_MODELS.filter(isClaude);
-    const gptIds = ALL_MODELS.filter(isGpt);
-    if (!claudeIds.length) cl.innerHTML = '<li class="muted">модели не пришли</li>';
-    if (!gptIds.length) gp.innerHTML = '<li class="muted">модели не пришли</li>';
-    claudeIds.forEach((id) => { const li = document.createElement("li"); li.className = "claude"; li.textContent = id; cl.append(li); });
-    gptIds.forEach((id) => { const li = document.createElement("li"); li.className = "gpt"; li.textContent = id; gp.append(li); });
+    const ul = $("#modelsList"); if (ul) ul.innerHTML = "";
+    if (!ALL_MODELS.length && ul) ul.innerHTML = '<li class="muted">модели не пришли (проверьте ключи провайдера)</li>';
+    ALL_MODELS.forEach((id) => {
+      const li = document.createElement("li");
+      li.className = isClaude(id) ? "claude" : (isGpt(id) ? "gpt" : "other"); li.textContent = id; ul.append(li);
+    });
     renderModelSelect();
   }
   function renderModelSelect(){

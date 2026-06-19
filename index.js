@@ -32,131 +32,183 @@ const LOG_FILE = process.env.FMCC_LOG_FILE || path.join(CONFIG_DIR, "proxy.log")
 const UI_FILE = path.join(__dirname, "ui.html");
 
 function loadConfig() {
-  const cfg = { port: 11440, upstream: "cc.freemodel.dev", upstreamOpenai: "api.freemodel.dev", key: "" };
+  const cfg = { port: 11440 };
   try { Object.assign(cfg, JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"))); } catch {}
   if (process.env.FMCC_PORT) cfg.port = parseInt(process.env.FMCC_PORT, 10);
-  if (process.env.FMCC_UPSTREAM) cfg.upstream = process.env.FMCC_UPSTREAM;
-  if (process.env.FMCC_UPSTREAM_OPENAI) cfg.upstreamOpenai = process.env.FMCC_UPSTREAM_OPENAI;
-  if (process.env.FMCC_KEY) cfg.key = process.env.FMCC_KEY;
   return cfg;
 }
 const CFG = loadConfig();
 
-// ─── profile (the provider this proxy fronts, with an enable toggle) ──────
-// FreeModel is the profile. When disabled, the proxy still serves the UI and
-// /api/* but returns 503 on /v1/* so clients see a clean "profile disabled"
-// instead of upstream errors. State persists in profile.json.
+// ─── providers (multi-provider: switch the active one from the UI/API) ─────
+// A provider is a named LLM gateway this proxy can front. Exactly one is
+// "active" at a time; all /v1/* traffic flows through it. Two kinds:
+//   - "freemodel":    two upstream hosts (cc.freemodel.dev for claude-* with
+//                     fingerprint gate, api.freemodel.dev for gpt-*), one
+//                     fe_oa_ key pool, needs the Claude Code fingerprint.
+//   - "openai-compat": one OpenAI-compatible baseUrl (e.g. opencode.ai/zen/go/v1),
+//                     any model id, Bearer sk-... keys, no fingerprint. claude-* is
+//                     served by translating Anthropic<->OpenAI in the proxy.
+// State persists in providers.json + per-provider keys-<id>.json. The profile
+// enable toggle (global on/off) lives on top, separate from which provider
+// is active.
+const PROVIDERS_FILE = path.join(CONFIG_DIR, "providers.json");
 const PROFILE_FILE = path.join(CONFIG_DIR, "profile.json");
-function loadProfile() {
-  const p = {
-    id: "freemodel",
-    name: "FreeModel",
-    enabled: true,
-    claudeUpstream: CFG.upstream,
-    openaiUpstream: CFG.upstreamOpenai,
-    note: "Real Claude (cc.freemodel.dev) + GPT (api.freemodel.dev) via one fe_oa key pool.",
-  };
-  try { Object.assign(p, JSON.parse(fs.readFileSync(PROFILE_FILE, "utf8"))); } catch {}
-  if (process.env.FMCC_PROFILE_ENABLED === "0" || process.env.FMCC_PROFILE_ENABLED === "false") p.enabled = false;
-  return p;
-}
-let PROFILE = loadProfile();
-function persistProfile() {
-  try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(PROFILE_FILE, JSON.stringify(PROFILE, null, 2) + "\n"); } catch {}
-}
+const LEGACY_KEYS_FILE = path.join(CONFIG_DIR, "keys.json");
 
-// ─── key pool (multi-key rotation: drain key #1 until exhausted, then #2, …) ─
-// On 401/402/429/5xx the proxy advances to the next usable key and retries the
-// SAME client request, so the client sees no break — only a final error if every
-// key in the pool is dead. The pointer only moves forward (sequential drain).
-const KEYS_FILE = path.join(CONFIG_DIR, "keys.json");
-function loadKeyPool() {
-  let arr = [];
-  try { const j = JSON.parse(fs.readFileSync(KEYS_FILE, "utf8")); if (Array.isArray(j.keys)) arr = j.keys.filter((k) => typeof k === "string" && k); } catch {}
-  // bootstrap from legacy single key (env FMCC_KEY or config.json "key")
-  if (!arr.length && CFG.key) arr = [CFG.key];
-  return arr;
+function defaultProviders() {
+  // First-run defaults seed the two providers the user actually has. If legacy
+  // config.json/profile.json exist, their upstream values win for freemodel.
+  const legacyCfg = (() => { try { return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")); } catch { return {}; } })();
+  const legacyProf = (() => { try { return JSON.parse(fs.readFileSync(PROFILE_FILE, "utf8")); } catch { return null; } })();
+  const claudeUp = legacyProf?.claudeUpstream || legacyCfg.upstream || "cc.freemodel.dev";
+  const openaiUp = legacyProf?.openaiUpstream || legacyCfg.upstreamOpenai || "api.freemodel.dev";
+  return [
+    {
+      id: "freemodel", name: "FreeModel", kind: "freemodel", enabled: true,
+      claudeUpstream: claudeUp, openaiUpstream: openaiUp,
+      keyPrefix: "fe_oa_", needsFingerprint: true,
+      note: "Real Claude (cc.freemodel.dev, fingerprint-gated) + GPT (api.freemodel.dev) via one fe_oa key pool.",
+    },
+    {
+      id: "opencode", name: "OpenCode Go", kind: "openai-compat", enabled: true,
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      keyPrefix: "sk-", needsFingerprint: false, probeModel: "glm-5.2",
+      note: "OpenCode Go subscription — glm / kimi / deepseek / qwen / minimax / mimo. One OpenAI-compatible endpoint, Bearer sk- key.",
+    },
+  ];
 }
-let KEY_POOL = loadKeyPool();
-let keyIdx = 0;
-const keyStats = {};
+function loadProviders() {
+  let d = { activeId: "freemodel", enabled: true, providers: defaultProviders() };
+  let loaded = null;
+  try { loaded = JSON.parse(fs.readFileSync(PROVIDERS_FILE, "utf8")); } catch {}
+  if (loaded) {
+    if (typeof loaded.activeId === "string") d.activeId = loaded.activeId;
+    if (typeof loaded.enabled === "boolean") d.enabled = loaded.enabled;
+    if (Array.isArray(loaded.providers) && loaded.providers.length) d.providers = loaded.providers;
+  }
+  if (process.env.FMCC_PROFILE_ENABLED === "0" || process.env.FMCC_PROFILE_ENABLED === "false") d.enabled = false;
+  // legacy profile.json had an `enabled` field for the single profile; migrate it
+  // only if providers.json wasn't loaded (first upgrade).
+  if (!loaded) {
+    try { const p = JSON.parse(fs.readFileSync(PROFILE_FILE, "utf8")); if (typeof p.enabled === "boolean") d.enabled = p.enabled; } catch {}
+  }
+  return d;
+}
+let PROVIDERS = loadProviders();
+function persistProviders() {
+  try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(PROVIDERS_FILE, JSON.stringify(PROVIDERS, null, 2) + "\n"); } catch {}
+}
+function activeProvider() { return PROVIDERS.providers.find((p) => p.id === PROVIDERS.activeId) || PROVIDERS.providers[0]; }
+function providerById(id) { return PROVIDERS.providers.find((p) => p.id === id); }
+// Global enable toggle ("profile enabled") — independent of which provider is
+// active. When off, /v1/* returns 503; UI + /api/* stay up.
+function profileEnabled() { return PROVIDERS.enabled !== false; }
+
+// One-time migration from the legacy single-provider layout: copy keys.json ->
+// keys-freemodel.json, and if the user gave us opencode keys out-of-band seed
+// keys-opencode.json. Idempotent (skips if target exists).
+function migrateLegacyKeys() {
+  try {
+    const fmPath = path.join(CONFIG_DIR, "keys-freemodel.json");
+    if (!fs.existsSync(fmPath) && fs.existsSync(LEGACY_KEYS_FILE)) {
+      const j = JSON.parse(fs.readFileSync(LEGACY_KEYS_FILE, "utf8"));
+      if (Array.isArray(j.keys) && j.keys.length) {
+        fs.writeFileSync(fmPath, JSON.stringify({ keys: j.keys }, null, 2) + "\n");
+      }
+    }
+  } catch {}
+}
+migrateLegacyKeys();
+
+// ─── per-provider key pools ───────────────────────────────────────────────
+// Each provider has its own key pool, its own rotation cursor, and its own
+// stats. All keyed by provider id so concurrent requests to different
+// providers don't interfere.
+const POOLS = {};        // id -> { keys: [], idx: 0 }
+const keyStats = {};     // id -> { [key]: {ok,limited,bad,count,lastStatus,lastUsed} }
+function keysFileFor(id) { return path.join(CONFIG_DIR, "keys-" + id + ".json"); }
+function loadPool(id) {
+  let keys = [];
+  try { const j = JSON.parse(fs.readFileSync(keysFileFor(id), "utf8")); if (Array.isArray(j.keys)) keys = j.keys.filter((k) => typeof k === "string" && k); } catch {}
+  // bootstrap freemodel from legacy single key (env FMCC_KEY / config.json)
+  if (!keys.length && id === "freemodel") {
+    try { const c = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")); if (c.key) keys = [c.key]; } catch {}
+    if (!keys.length && process.env.FMCC_KEY) keys = [process.env.FMCC_KEY];
+  }
+  return { keys, idx: 0 };
+}
+function poolOf(id) {
+  if (!POOLS[id]) {
+    POOLS[id] = loadPool(id);
+    keyStats[id] = {};
+    POOLS[id].keys.forEach((k) => ensureStats(id, k));
+  }
+  return POOLS[id];
+}
+function persistPool(id) {
+  try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(keysFileFor(id), JSON.stringify({ keys: POOLS[id].keys }, null, 2) + "\n"); } catch {}
+}
 // Rotate to another key only on auth/rate-limit errors. 5xx is an upstream
 // outage, not a key problem — rotating would burn the whole pool in one
 // request and mark every key "limited" for nothing. 5xx is returned to the
 // client as-is (normalized to the right error shape).
 const ROTATE_STATUSES = new Set([401, 402, 403, 429]);
-function ensureStats(k) { if (!keyStats[k]) keyStats[k] = { ok: 0, limited: 0, bad: false, count: 0, lastStatus: null, lastUsed: null }; return keyStats[k]; }
-KEY_POOL.forEach(ensureStats);
-function persistKeys() {
-  try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(KEYS_FILE, JSON.stringify({ keys: KEY_POOL }, null, 2) + "\n"); } catch {}
-}
+function ensureStats(id, k) { if (!keyStats[id]) keyStats[id] = {}; if (!keyStats[id][k]) keyStats[id][k] = { ok: 0, limited: 0, bad: false, count: 0, lastStatus: null, lastUsed: null }; return keyStats[id][k]; }
 function maskKey(k) { return k ? k.slice(0, 8) + "…" + k.slice(-4) : "(none)"; }
-function currentKey() { return KEY_POOL[keyIdx]; }
-function reloadKeyStats() { KEY_POOL.forEach(ensureStats); }
+function currentKey(id) { const p = poolOf(id); return p.keys[p.idx]; }
+function reloadKeyStats(id) { const p = poolOf(id); p.keys.forEach((k) => ensureStats(id, k)); }
 // Per-request cursor advance: returns the next non-bad key index after `from`,
-// WITHOUT mutating the shared keyIdx. Each request snapshots keyIdx, walks the
-// pool on a local cursor, and only commits keyIdx onto a key that returned 200.
-// That stops two concurrent requests from yanking the shared pointer out from
-// under each other (the race where both hit 401 and both advancePointer()).
-function nextUsable(from) {
-  if (KEY_POOL.length === 0) return from;
-  for (let i = 0; i < KEY_POOL.length; i++) {
-    const idx = (from + 1 + i) % KEY_POOL.length;
-    const s = keyStats[KEY_POOL[idx]];
+// WITHOUT mutating the shared pool.idx. Each request snapshots idx, walks the
+// pool on a local cursor, and only commits idx onto a key that returned 200.
+function nextUsable(id, from) {
+  const p = poolOf(id);
+  if (p.keys.length === 0) return from;
+  for (let i = 0; i < p.keys.length; i++) {
+    const idx = (from + 1 + i) % p.keys.length;
+    const s = keyStats[id][p.keys[idx]];
     if (!s || !s.bad) return idx;
   }
-  return (from + 1) % KEY_POOL.length; // all bad — just step forward
+  return (from + 1) % p.keys.length; // all bad — just step forward
 }
 
-// Sequential forward health probe: find the FIRST working key, lock the pointer
-// onto it, leave the rest untouched. Stops at the first 200 (minimal requests,
-// IP-friendly). Dead keys encountered are marked (401 -> bad, others -> limited).
+// Sequential forward health probe for a provider's pool: find the FIRST
+// working key, lock the cursor onto it. Probe shape depends on provider kind:
+// freemodel -> fingerprinted /v1/messages on cc host; openai-compat ->
+// /chat/completions on baseUrl. Stops at first 200, skips known bad/limited.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function probeOnce(body, key) {
-  return new Promise((resolve) => {
-    const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers: buildUpstreamHeaders(body, key) }, (upres) => {
-      upres.resume();
-      upres.on("end", () => resolve({ status: upres.statusCode || 0 }));
-    });
-    up.on("error", () => resolve({ status: 0 }));
-    up.setTimeout(15000, () => { try { up.destroy(); } catch {} resolve({ status: 0 }); });
-    up.write(body);
-    up.end();
-  });
-}
-async function findFirstWorking() {
-  if (!KEY_POOL.length) return { ok: false, error: "empty pool" };
-  const probeBody = Buffer.from(injectFingerprint(JSON.stringify({
-    model: "claude-haiku-4-5-20251001", max_tokens: 1, stream: false,
-    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
-  })).body);
-  const start = keyIdx;
+async function findFirstWorking(providerId) {
+  const p = providerById(providerId) || activeProvider();
+  const pool = poolOf(p.id);
+  if (!pool.keys.length) return { ok: false, error: "empty pool" };
+  const start = pool.idx;
   const tried = [];
-  for (let step = 0; step < KEY_POOL.length; step++) {
-    const i = (start + step) % KEY_POOL.length;
-    const key = KEY_POOL[i];
-    const s = ensureStats(key);
-    // Skip keys we already know are dead or currently rate-limited — this is a
-    // manual "find me a working key now" action, not a full re-probe. Re-touching
-    // known-limited keys just wastes requests and IP budget.
+  for (let step = 0; step < pool.keys.length; step++) {
+    const i = (start + step) % pool.keys.length;
+    const key = pool.keys[i];
+    const s = ensureStats(p.id, key);
     if (s.bad) { tried.push({ index: i, masked: maskKey(key), status: "skip(bad)" }); continue; }
     if (s.limited) { tried.push({ index: i, masked: maskKey(key), status: "skip(limited×" + s.limited + ")" }); continue; }
-    const res = await probeOnce(probeBody, key);
+    const res = await probeProviderOnce(p, key);
     s.lastStatus = res.status; s.lastUsed = new Date().toISOString(); s.count++;
-    if (res.status === 200) { s.ok++; keyIdx = i; return { ok: true, current: i, masked: maskKey(key), probed: step + 1, tried }; }
-    if (res.status === 401) s.bad = true; else if (ROTATE_STATUSES.has(res.status)) s.limited++;
+    if (res.status === 200) { s.ok++; pool.idx = i; return { ok: true, current: i, masked: maskKey(key), probed: step + 1, tried }; }
+    if (res.status === 401 || res.status === 403) s.bad = true; else if (ROTATE_STATUSES.has(res.status)) s.limited++;
     tried.push({ index: i, masked: maskKey(key), status: res.status || "neterr" });
-    await sleep(400); // gentle pacing so the IP doesn't look abusive
+    await sleep(400);
   }
-  return { ok: false, current: keyIdx, probed: tried.length, tried, error: "no working key in pool" };
+  return { ok: false, current: pool.idx, probed: tried.length, tried, error: "no working key in pool" };
 }
 
-if (!KEY_POOL.length) {
-  console.error("No FreeModel keys configured. Add one (or many):");
-  console.error("  node keys.js add fe_oa_...");
-  console.error("  or: FMCC_KEY=fe_oa_... node index.js");
-  console.error("  or put {\"keys\":[\"fe_oa_...\"]} in " + KEYS_FILE);
-  process.exit(1);
+// Pre-flight: ensure the active provider has at least one key. If not, point
+// the user at the UI/API. (Other providers may still be empty — that's fine,
+// they're not active.)
+{
+  const ap = activeProvider();
+  if (ap && !poolOf(ap.id).keys.length) {
+    console.error("Active provider '" + ap.id + "' has no keys. Add some:");
+    console.error("  UI:  http://127.0.0.1:" + CFG.port + "/  -> Key pool -> Add");
+    console.error("  API: POST /api/keys { keys: [\"" + (ap.keyPrefix || "") + "…\"] }");
+    console.error("  CLI: node keys.js add " + (ap.keyPrefix || "") + "...");
+  }
 }
 
 // ─── fingerprint (client-impersonation profile, externalized) ────────────
@@ -457,10 +509,57 @@ function pushLog(entry) {
   } catch {}
 }
 
+// ─── routing: map (provider, client proto, model) -> upstream endpoint ────
+// One place that decides where a request goes and whether it needs
+// translation/fingerprint. Keeps the handlers free of provider/kind branches.
+function isClaudeModel(id) { return !!id && /^claude/i.test(id); }
+function isGptModel(id) { return !!id && /^gpt-/i.test(id); }
+
+function openAICompatEndpoint(p) {
+  // baseUrl like https://opencode.ai/zen/go/v1 -> {host, port, basePath}
+  let u;
+  try { u = new URL(p.baseUrl); } catch { u = { hostname: p.baseUrl, port: "", pathname: "/v1", protocol: "https:" }; }
+  return {
+    host: u.hostname,
+    port: u.port ? parseInt(u.port, 10) : (u.protocol === "https:" ? 443 : 80),
+    basePath: (u.pathname || "/v1").replace(/\/+$/, "") || "/v1",
+  };
+}
+// routeRequest -> { host, port, path, upstreamProto, fingerprint, translate }
+//   upstreamProto: "anthropic" | "openai"  — what the upstream endpoint speaks
+//   translate:      true if client proto != upstream proto (proxy must translate)
+//   fingerprint:    true if the Claude Code fingerprint must be injected (freemodel cc)
+function routeRequest(p, clientProto, model) {
+  if (p.kind === "freemodel") {
+    if (isClaudeModel(model)) {
+      return { host: p.claudeUpstream, port: 443, path: "/v1/messages?beta=true", upstreamProto: "anthropic", fingerprint: !!p.needsFingerprint, translate: clientProto !== "anthropic" };
+    }
+    return { host: p.openaiUpstream, port: 443, path: "/v1/chat/completions", upstreamProto: "openai", fingerprint: false, translate: clientProto !== "openai" };
+  }
+  // openai-compat: one baseUrl, always OpenAI upstream; claude-* is served by
+  // translating Anthropic->OpenAI in the proxy (the host has no /v1/messages).
+  const e = openAICompatEndpoint(p);
+  return { host: e.host, port: e.port, path: e.basePath + "/chat/completions", upstreamProto: "openai", fingerprint: false, translate: clientProto !== "openai" };
+}
+function modelsEndpoints(p) {
+  // returns array of {host, port, path} to fetch /models from for this provider
+  if (p.kind === "freemodel") {
+    return [
+      { host: p.claudeUpstream, port: 443, path: "/v1/models", anthropic: true },
+      { host: p.openaiUpstream, port: 443, path: "/v1/models", anthropic: false },
+    ];
+  }
+  const e = openAICompatEndpoint(p);
+  return [{ host: e.host, port: e.port, path: e.basePath + "/models", anthropic: false }];
+}
+
 // ─── upstream request helpers ────────────────────────────────────────────
-function buildUpstreamHeaders(bodyBuf, key, extra) {
+// Headers for an Anthropic-shape upstream (freemodel cc host). Carries the
+// Claude Code fingerprint markers the gate checks. key goes both as x-api-key
+// and Authorization: Bearer (cc.freemodel.dev accepts either).
+function buildAnthropicUpstreamHeaders(bodyBuf, key, host) {
   const headers = {
-    "host": CFG.upstream,
+    "host": host,
     "user-agent": UA,
     "x-app": "cli",
     "anthropic-dangerous-direct-browser-access": "true",
@@ -470,9 +569,56 @@ function buildUpstreamHeaders(bodyBuf, key, extra) {
     "content-type": "application/json",
   };
   if (bodyBuf && bodyBuf.length) headers["content-length"] = Buffer.byteLength(bodyBuf);
-  const k = key || CFG.key;
-  if (k) { headers["x-api-key"] = k; headers["authorization"] = "Bearer " + k; }
-  return Object.assign(headers, extra || {});
+  if (key) { headers["x-api-key"] = key; headers["authorization"] = "Bearer " + key; }
+  return headers;
+}
+// Headers for an OpenAI-shape upstream (freemodel api host OR openai-compat
+// baseUrl). Bearer only.
+function buildOpenAIUpstreamHeaders(bodyBuf, key, host) {
+  const headers = {
+    "host": host,
+    "user-agent": UA,
+    "accept": "application/json",
+    "content-type": "application/json",
+  };
+  if (bodyBuf && bodyBuf.length) headers["content-length"] = Buffer.byteLength(bodyBuf);
+  if (key) headers["authorization"] = "Bearer " + key;
+  return headers;
+}
+function buildHeadersForRoute(route, bodyBuf, key) {
+  return route.upstreamProto === "anthropic"
+    ? buildAnthropicUpstreamHeaders(bodyBuf, key, route.host)
+    : buildOpenAIUpstreamHeaders(bodyBuf, key, route.host);
+}
+
+// Probe one key against a provider with the right shape for its kind. Used by
+// findFirstWorking. Minimal request (max_tokens:1).
+function probeProviderOnce(p, key) {
+  return new Promise((resolve) => {
+    if (p.kind === "freemodel") {
+      const body = Buffer.from(injectFingerprint(JSON.stringify({
+        model: "claude-haiku-4-5-20251001", max_tokens: 1, stream: false,
+        messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      })).body);
+      const up = https.request({ host: p.claudeUpstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers: buildAnthropicUpstreamHeaders(body, key, p.claudeUpstream) }, (upres) => {
+        upres.resume(); upres.on("end", () => resolve({ status: upres.statusCode || 0 }));
+      });
+      up.on("error", () => resolve({ status: 0 }));
+      up.setTimeout(15000, () => { try { up.destroy(); } catch {} resolve({ status: 0 }); });
+      up.write(body); up.end();
+      return;
+    }
+    // openai-compat: tiny chat completion on the baseUrl
+    const e = openAICompatEndpoint(p);
+    const probeModel = p.probeModel || "glm-5.2";
+    const body = Buffer.from(JSON.stringify({ model: probeModel, max_tokens: 1, stream: false, messages: [{ role: "user", content: "hi" }] }));
+    const up = https.request({ host: e.host, port: e.port, method: "POST", path: e.basePath + "/chat/completions", headers: buildOpenAIUpstreamHeaders(body, key, e.host) }, (upres) => {
+      upres.resume(); upres.on("end", () => resolve({ status: upres.statusCode || 0 }));
+    });
+    up.on("error", () => resolve({ status: 0 }));
+    up.setTimeout(15000, () => { try { up.destroy(); } catch {} resolve({ status: 0 }); });
+    up.write(body); up.end();
+  });
 }
 
 // ─── response safety + error normalization ───────────────────────────────
@@ -676,101 +822,115 @@ function respondOpenAINonStream(upres, cres, model, logEntry) {
   });
 }
 
-// Generic GET passthrough (used by /v1/models).
-function passthroughGet(reqUrl, clientHeaders, cres) {
-  const headers = buildUpstreamHeaders(null, currentKey(), { accept: "application/json" });
-  const logEntry = { kind: "api", method: "GET", path: reqUrl, status: null };
-  const up = https.request({ host: CFG.upstream, port: 443, method: "GET", path: reqUrl, headers }, (upres) => {
-    logEntry.status = upres.statusCode;
-    if (!safeWriteHead(cres, upres.statusCode || 502, filterHeaders(upres.headers))) { try { upres.destroy(); } catch {} return; }
+// OpenAI-shape upstream -> OpenAI-shape client: pipe the response straight
+// through (the host already speaks OpenAI, stream + non-stream). Only the
+// error path is normalized; on 200 we just filter hop-by-hop headers and pipe.
+function respondOpenAIPassthrough(upres, cres, logEntry) {
+  const st = upres.statusCode || 502;
+  if (st >= 200 && st < 300) {
+    if (!safeWriteHead(cres, st, filterHeaders(upres.headers))) { try { upres.destroy(); } catch {} return; }
     upres.pipe(cres);
     upres.on("error", () => { try { cres.destroy(); upres.destroy(); } catch {} });
     cres.on("error", () => { try { upres.destroy(); } catch {} });
     upres.on("end", () => pushLog(logEntry));
+    return;
+  }
+  const errBuf = [];
+  upres.on("data", (c) => errBuf.push(c));
+  upres.on("end", () => {
+    pushLog(logEntry);
+    const norm = normalizeOpenAIError(Buffer.concat(errBuf).toString("utf8"), st);
+    const b = Buffer.from(JSON.stringify(norm));
+    safeWriteHead(cres, st, { "content-type": "application/json", "content-length": b.length });
+    safeEnd(cres, b);
   });
-  up.on("error", (e) => proxyError(cres, logEntry, e));
-  up.setTimeout(30000, () => { try { up.destroy(); } catch {} proxyError(cres, logEntry, new Error("upstream timeout")); });
-  up.end();
 }
 
-// ─── GPT / OpenAI-host (api.freemodel.dev) routing ────────────────────────
-// FreeModel's GPT models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex) live
-// on api.freemodel.dev, which speaks OpenAI Chat Completions natively with no
-// client fingerprint gate. The same fe_oa key works. We route by model id:
-// gpt-* goes straight to the OpenAI host (no Anthropic translation, no
-// fingerprint); claude-* keeps the cc.freemodel.dev fingerprint path.
-function isGptModel(id) {
-  return !!id && /^gpt-/i.test(id);
+// OpenAI-shape upstream -> Anthropic-shape client, non-stream: buffer the
+// OpenAI JSON, translate one-shot to an Anthropic Message, normalize errors.
+function respondOpenAIToAnthropicNonStream(upres, cres, model, logEntry) {
+  const data = [];
+  upres.on("data", (c) => data.push(c));
+  upres.on("end", () => {
+    const text = Buffer.concat(data).toString("utf8");
+    const st = upres.statusCode || 502;
+    logEntry.status = st; pushLog(logEntry);
+    if (st !== 200) {
+      const norm = normalizeAnthropicError(text, st);
+      const b = Buffer.from(JSON.stringify(norm));
+      safeWriteHead(cres, st, { "content-type": "application/json", "content-length": b.length });
+      safeEnd(cres, b);
+      return;
+    }
+    let oai; try { oai = JSON.parse(text); } catch {
+      const b = Buffer.from(JSON.stringify({ type: "error", error: { type: "proxy_error", message: "bad upstream json" } }));
+      safeWriteHead(cres, 502, { "content-type": "application/json", "content-length": b.length }); safeEnd(cres, b); return;
+    }
+    const ant = openAIResponseToAnthropic(oai);
+    const buf = Buffer.from(JSON.stringify(ant));
+    safeWriteHead(cres, 200, { "content-type": "application/json", "content-length": buf.length });
+    safeEnd(cres, buf);
+  });
 }
 
-function buildOpenAIUpstreamHeaders(bodyBuf, key) {
-  const headers = {
-    "host": CFG.upstreamOpenai,
-    "user-agent": UA,
-    "accept": "application/json",
-    "content-type": "application/json",
-  };
-  if (bodyBuf && bodyBuf.length) headers["content-length"] = Buffer.byteLength(bodyBuf);
-  const k = key || CFG.key || currentKey();
-  if (k) { headers["authorization"] = "Bearer " + k; }
-  return headers;
-}
-
-// Forward an OpenAI Chat Completions body as-is to api.freemodel.dev and pipe
-// the response straight back (the host already speaks OpenAI, stream + non-
-// stream). Key rotation on 401/403/429 only; 5xx is returned to the client
-// (normalized) so an upstream outage doesn't burn the pool.
-function postOpenAIDirectWithRetry(bodyBuf, cres, model, logEntry) {
-  const maxAttempts = Math.max(1, KEY_POOL.length);
+// Unified forwarding with per-request key rotation. This replaces the old
+// postWithRetry / postOpenAIDirectWithRetry / gpt-via-anthropic inline loops:
+// one function, parameterized by provider + route, that picks the right
+// responder for the (upstreamProto x clientProto x stream) matrix.
+//   route: from routeRequest(provider, clientProto, model)
+//   bodyBuf: already-shaped upstream body (translated + fingerprinted if needed)
+//   clientProto: "anthropic" | "openai"  — for error-shape normalization
+function forwardWithRetry(provider, route, bodyBuf, clientProto, clientStream, model, cres, logEntry) {
+  const pool = poolOf(provider.id);
+  const maxAttempts = Math.max(1, pool.keys.length);
   let attempts = 0;
-  let cursor = keyIdx; // per-request snapshot; only commit keyIdx on success
+  let cursor = pool.idx; // per-request snapshot; commit pool.idx only on 200
+  const errShape = clientProto === "openai" ? "openai" : "anthropic";
+
+  function dispatch(upres) {
+    const upProto = route.upstreamProto;
+    if (upProto === "anthropic" && clientProto === "anthropic") {
+      return clientStream ? respondAnthropicStream(upres, cres, logEntry) : respondAnthropicNonStream(upres, cres, logEntry);
+    }
+    if (upProto === "anthropic" && clientProto === "openai") {
+      return clientStream ? respondOpenAIStream(upres, cres, model, logEntry) : respondOpenAINonStream(upres, cres, model, logEntry);
+    }
+    if (upProto === "openai" && clientProto === "openai") {
+      return respondOpenAIPassthrough(upres, cres, logEntry);
+    }
+    // openai upstream -> anthropic client
+    return clientStream ? openAIStreamToAnthropic(upres, cres, model, logEntry) : respondOpenAIToAnthropicNonStream(upres, cres, model, logEntry);
+  }
+
   function attempt() {
-    if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool"), "openai"); return; }
-    const key = KEY_POOL[cursor];
+    if (!pool.keys.length) { proxyError(cres, logEntry, new Error("no keys in pool"), errShape); return; }
+    const key = pool.keys[cursor];
     attempts++;
-    const headers = buildOpenAIUpstreamHeaders(bodyBuf, key);
-    const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers }, (upres) => {
+    const headers = buildHeadersForRoute(route, bodyBuf, key);
+    const up = https.request({ host: route.host, port: route.port, method: "POST", path: route.path, headers }, (upres) => {
       const st = upres.statusCode || 0;
-      const s = ensureStats(key);
+      const s = ensureStats(provider.id, key);
       s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
       if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
         upres.resume();
         if (st === 401 || st === 402 || st === 403) s.bad = true; else if (st === 429) s.limited++;
         const note = maskKey(key) + "->" + st;
-        cursor = nextUsable(cursor);
+        cursor = nextUsable(provider.id, cursor);
         logEntry.note = logEntry.note ? logEntry.note + " " + note + "->retry" : note + "->retry";
         attempt();
         return;
       }
       logEntry.status = st;
-      if (st >= 200 && st < 300) {
-        s.ok++;
-        keyIdx = cursor; // commit shared pointer onto the working key
-        if (!safeWriteHead(cres, st, filterHeaders(upres.headers))) { try { upres.destroy(); } catch {} return; }
-        upres.pipe(cres);
-        upres.on("error", () => { try { cres.destroy(); upres.destroy(); } catch {} });
-        cres.on("error", () => { try { upres.destroy(); } catch {} });
-        upres.on("end", () => pushLog(logEntry));
-      } else {
-        // terminal error (rotation exhausted or non-rotatable 4xx/5xx): normalize
-        const errBuf = [];
-        upres.on("data", (c) => errBuf.push(c));
-        upres.on("end", () => {
-          pushLog(logEntry);
-          const norm = normalizeOpenAIError(Buffer.concat(errBuf).toString("utf8"), st);
-          const b = Buffer.from(JSON.stringify(norm));
-          safeWriteHead(cres, st || 502, { "content-type": "application/json", "content-length": b.length });
-          safeEnd(cres, b);
-        });
-      }
+      if (st >= 200 && st < 300) { s.ok++; pool.idx = cursor; }
+      dispatch(upres);
     });
     up.on("error", (e) => {
-      if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "neterr->retry"; attempt(); }
-      else proxyError(cres, logEntry, e, "openai");
+      if (attempts < maxAttempts) { cursor = nextUsable(provider.id, cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "neterr->retry"; attempt(); }
+      else proxyError(cres, logEntry, e, errShape);
     });
-    up.setTimeout(120000, () => { try { up.destroy(); } catch {}
-      if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "timeout->retry"; attempt(); }
-      else proxyError(cres, logEntry, new Error("upstream timeout"), "openai");
+    up.setTimeout(180000, () => { try { up.destroy(); } catch {}
+      if (attempts < maxAttempts) { cursor = nextUsable(provider.id, cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "timeout->retry"; attempt(); }
+      else proxyError(cres, logEntry, new Error("upstream timeout"), errShape);
     });
     up.write(bodyBuf);
     up.end();
@@ -979,56 +1139,7 @@ function openAIStreamToAnthropic(upres, cres, model, logEntry) {
   cres.on("error", () => { alive = false; try { upres.destroy(); } catch {} });
 }
 
-// POST to upstream /v1/messages?beta=true with key rotation. On a rotatable
-// status (401/403/429) it advances the LOCAL cursor to the next key and retries
-// the SAME request — at most once per key — so the client sees no break. 5xx
-// is not rotatable (upstream outage). keyIdx is committed only on 200, so
-// concurrent requests don't fight over the shared pointer.
-function postWithRetry(bodyBuf, cres, mode, model, logEntry) {
-  const maxAttempts = Math.max(1, KEY_POOL.length);
-  let attempts = 0;
-  let cursor = keyIdx; // per-request snapshot
-  const errShape = (mode === "openai-stream" || mode === "openai-nonstream") ? "openai" : "anthropic";
-  function dispatch(upres) {
-    if (mode === "anthropic-stream") respondAnthropicStream(upres, cres, logEntry);
-    else if (mode === "anthropic-nonstream") respondAnthropicNonStream(upres, cres, logEntry);
-    else if (mode === "openai-stream") respondOpenAIStream(upres, cres, model, logEntry);
-    else respondOpenAINonStream(upres, cres, model, logEntry); // openai-nonstream
-  }
-  function attempt() {
-    if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool"), errShape); return; }
-    const key = KEY_POOL[cursor];
-    attempts++;
-    const headers = buildUpstreamHeaders(bodyBuf, key);
-    const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers }, (upres) => {
-      const st = upres.statusCode || 0;
-      const s = ensureStats(key);
-      s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
-      if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
-        upres.resume(); // drain & discard the error body, free the socket
-        if (st === 401 || st === 402 || st === 403) s.bad = true; else if (st === 429) s.limited++;
-        const note = maskKey(key) + "->" + st;
-        cursor = nextUsable(cursor);
-        logEntry.note = logEntry.note ? logEntry.note + " " + note + "->retry" : note + "->retry";
-        attempt();
-        return;
-      }
-      if (st >= 200 && st < 300) { s.ok++; keyIdx = cursor; }
-      dispatch(upres);
-    });
-    up.on("error", (e) => {
-      if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "neterr->retry"; attempt(); }
-      else proxyError(cres, logEntry, e, errShape);
-    });
-    up.setTimeout(180000, () => { try { up.destroy(); } catch {}
-      if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "timeout->retry"; attempt(); }
-      else proxyError(cres, logEntry, new Error("upstream timeout"), errShape);
-    });
-    up.write(bodyBuf);
-    up.end();
-  }
-  attempt();
-}
+// (postWithRetry was replaced by the unified forwardWithRetry above.)
 
 // ─── UI helpers ───────────────────────────────────────────────────────────
 function sendJson(cres, code, obj) {
@@ -1078,52 +1189,151 @@ const server = http.createServer((creq, cres) => {
 
   // Profile disabled → block LLM traffic, but NOT /v1/models (metadata) so the
   // UI model list and test picker keep working while the profile is off.
-  if (!PROFILE.enabled && url.startsWith("/v1/") && url !== "/v1/models" && !url.startsWith("/v1/models")) {
+  if (!profileEnabled() && url.startsWith("/v1/") && url !== "/v1/models" && !url.startsWith("/v1/models")) {
+    const ap = activeProvider();
     const buf = Buffer.from(JSON.stringify({
       type: "error", error: { type: "profile_disabled",
-        message: "Profile '" + PROFILE.id + "' is disabled. Enable it in the proxy UI or PUT /api/profile { enabled: true }." }
+        message: "Profile is disabled. Enable it in the proxy UI or PUT /api/profile { enabled: true }." }
     }));
-    safeWriteHead(cres, 503, { "content-type": "application/json", "content-length": buf.length, "x-profile-enabled": "false" });
+    safeWriteHead(cres, 503, { "content-type": "application/json", "content-length": buf.length, "x-profile-enabled": "false", "x-active-provider": ap ? ap.id : "" });
     safeEnd(cres, buf);
     return;
   }
 
-  // UI backend
+  // query param helper (for ?provider= on key endpoints)
+  const qIdx = creq.url.indexOf("?");
+  const queryStr = qIdx >= 0 ? creq.url.slice(qIdx + 1) : "";
+  function queryParam(name) {
+    for (const pair of queryStr.split("&")) {
+      const eq = pair.indexOf("="); if (eq < 0) continue;
+      if (decodeURIComponent(pair.slice(0, eq)) === name) return decodeURIComponent(pair.slice(eq + 1));
+    }
+    return null;
+  }
+  function providerForKeys() { const id = queryParam("provider"); return (id && providerById(id)) || activeProvider(); }
+
+  // UI backend: global profile enable + active provider selector (compat alias)
   if (url === "/api/profile") {
-    if (creq.method === "GET") { sendJson(cres, 200, { ...PROFILE, profileFile: PROFILE_FILE }); return; }
+    if (creq.method === "GET") {
+      const ap = activeProvider();
+      sendJson(cres, 200, { id: ap.id, name: ap.name, enabled: profileEnabled(), activeId: PROVIDERS.activeId, providers: PROVIDERS.providers, profileFile: PROVIDERS_FILE });
+      return;
+    }
     if (creq.method === "PUT") {
       readJsonBody(creq, (body, err) => {
         if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
-        if (typeof body.enabled === "boolean") PROFILE.enabled = body.enabled;
-        if (typeof body.name === "string") PROFILE.name = body.name;
-        if (typeof body.note === "string") PROFILE.note = body.note;
-        persistProfile();
-        pushLog({ kind: "api", method: "PUT", path: "/api/profile", status: 200, note: "enabled=" + PROFILE.enabled });
-        sendJson(cres, 200, { ok: true, profile: { ...PROFILE, profileFile: PROFILE_FILE } });
+        if (typeof body.enabled === "boolean") PROVIDERS.enabled = body.enabled;
+        if (typeof body.activeId === "string" && providerById(body.activeId)) PROVIDERS.activeId = body.activeId;
+        persistProviders();
+        const ap = activeProvider();
+        pushLog({ kind: "api", method: "PUT", path: "/api/profile", status: 200, note: "enabled=" + PROVIDERS.enabled + " active=" + ap.id });
+        sendJson(cres, 200, { ok: true, profile: { id: ap.id, name: ap.name, enabled: profileEnabled(), activeId: PROVIDERS.activeId }, providers: PROVIDERS.providers });
       });
       return;
     }
   }
+
+  // Multi-provider management
+  if (url === "/api/providers" && creq.method === "GET") {
+    sendJson(cres, 200, { activeId: PROVIDERS.activeId, enabled: profileEnabled(), providers: PROVIDERS.providers });
+    return;
+  }
+  if (url === "/api/providers/active" && creq.method === "PUT") {
+    readJsonBody(creq, (body, err) => {
+      if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
+      if (typeof body.id === "string" && providerById(body.id)) {
+        PROVIDERS.activeId = body.id; persistProviders();
+        pushLog({ kind: "api", method: "PUT", path: "/api/providers/active", status: 200, note: "active=" + body.id });
+        sendJson(cres, 200, { ok: true, activeId: body.id, provider: providerById(body.id) });
+      } else sendJson(cres, 404, { ok: false, error: "unknown provider id" });
+    });
+    return;
+  }
+  if (url === "/api/providers" && creq.method === "POST") {
+    readJsonBody(creq, (body, err) => {
+      if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
+      const id = (typeof body.id === "string" && body.id) || ("prov" + crypto.randomBytes(3).toString("hex"));
+      if (providerById(id)) { sendJson(cres, 409, { ok: false, error: "provider id already exists" }); return; }
+      const kind = body.kind === "freemodel" ? "freemodel" : "openai-compat";
+      const p = {
+        id, name: typeof body.name === "string" ? body.name : id, kind, enabled: true,
+        keyPrefix: typeof body.keyPrefix === "string" ? body.keyPrefix : "",
+        needsFingerprint: kind === "freemodel",
+        note: typeof body.note === "string" ? body.note : "",
+      };
+      if (kind === "freemodel") {
+        p.claudeUpstream = body.claudeUpstream || "cc.freemodel.dev";
+        p.openaiUpstream = body.openaiUpstream || "api.freemodel.dev";
+      } else {
+        p.baseUrl = body.baseUrl || "";
+        p.probeModel = body.probeModel || "";
+        if (!p.baseUrl) { sendJson(cres, 400, { ok: false, error: "baseUrl required for openai-compat provider" }); return; }
+      }
+      PROVIDERS.providers.push(p); persistProviders();
+      pushLog({ kind: "api", method: "POST", path: "/api/providers", status: 200, note: "added " + id });
+      sendJson(cres, 200, { ok: true, provider: p });
+    });
+    return;
+  }
+  // PUT /api/providers/<id> — edit mutable fields (name, note, baseUrl, upstreams, probeModel, keyPrefix)
+  if (url.startsWith("/api/providers/") && creq.method === "PUT") {
+    const id = url.slice("/api/providers/".length).split("/")[0];
+    const p = providerById(id);
+    if (!p) { sendJson(cres, 404, { ok: false, error: "unknown provider id" }); return; }
+    readJsonBody(creq, (body, err) => {
+      if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
+      if (typeof body.name === "string") p.name = body.name;
+      if (typeof body.note === "string") p.note = body.note;
+      if (typeof body.keyPrefix === "string") p.keyPrefix = body.keyPrefix;
+      if (typeof body.claudeUpstream === "string") p.claudeUpstream = body.claudeUpstream;
+      if (typeof body.openaiUpstream === "string") p.openaiUpstream = body.openaiUpstream;
+      if (typeof body.baseUrl === "string") p.baseUrl = body.baseUrl;
+      if (typeof body.probeModel === "string") p.probeModel = body.probeModel;
+      if (typeof body.needsFingerprint === "boolean") p.needsFingerprint = body.needsFingerprint;
+      persistProviders();
+      pushLog({ kind: "api", method: "PUT", path: "/api/providers/" + id, status: 200, note: "edited" });
+      sendJson(cres, 200, { ok: true, provider: p });
+    });
+    return;
+  }
+  if (url.startsWith("/api/providers/") && creq.method === "DELETE") {
+    const id = url.slice("/api/providers/".length).split("/")[0];
+    if (PROVIDERS.providers.length <= 1) { sendJson(cres, 400, { ok: false, error: "cannot delete the last provider" }); return; }
+    const i = PROVIDERS.providers.findIndex((p) => p.id === id);
+    if (i < 0) { sendJson(cres, 404, { ok: false, error: "unknown provider id" }); return; }
+    PROVIDERS.providers.splice(i, 1);
+    if (PROVIDERS.activeId === id) PROVIDERS.activeId = PROVIDERS.providers[0].id;
+    persistProviders();
+    pushLog({ kind: "api", method: "DELETE", path: "/api/providers/" + id, status: 200, note: "removed" });
+    sendJson(cres, 200, { ok: true, activeId: PROVIDERS.activeId });
+    return;
+  }
+
   if (url === "/api/status") {
+    const ap = activeProvider();
+    const pool = poolOf(ap.id);
     sendJson(cres, 200, {
       ok: true,
       port: CFG.port,
-      upstream: CFG.upstream,
-      profile: { id: PROFILE.id, name: PROFILE.name, enabled: PROFILE.enabled },
-      keys: { total: KEY_POOL.length, current: keyIdx, currentMasked: maskKey(currentKey()) },
+      enabled: profileEnabled(),
+      activeId: PROVIDERS.activeId,
+      activeProvider: { id: ap.id, name: ap.name, kind: ap.kind, needsFingerprint: !!ap.needsFingerprint,
+        baseUrl: ap.baseUrl || null, claudeUpstream: ap.claudeUpstream || null, openaiUpstream: ap.openaiUpstream || null },
+      providers: PROVIDERS.providers.map((p) => ({ id: p.id, name: p.name, kind: p.kind, enabled: p.enabled !== false, keys: poolOf(p.id).keys.length })),
+      keys: { total: pool.keys.length, current: pool.idx, currentMasked: maskKey(currentKey(ap.id)) },
       device_id: DEVICE_ID,
       session_id: SESSION_ID,
       version: require("./package.json").version,
       uptime_s: Math.round(process.uptime()),
-      endpoints: ["POST /v1/messages (Anthropic; claude-* → cc host, gpt-* → api host)", "POST /v1/chat/completions (OpenAI; gpt-* → api host direct, claude-* → cc host)", "GET /v1/models (merged: Claude + GPT)"],
-      upstreams: { claude: CFG.upstream, openai: CFG.upstreamOpenai },
+      endpoints: ["POST /v1/messages (Anthropic)", "POST /v1/chat/completions (OpenAI)", "GET /v1/models (active provider)"],
       fingerprint: { capturedFrom: FP.capturedFrom, userAgent: FP.userAgent, profileFile: FINGERPRINT_FILE },
     });
     return;
   }
   if (url === "/api/logs") { sendJson(cres, 200, { logs: LOGS.slice().reverse() }); return; }
 
-  // Fingerprint profile (read + update without editing code)
+  // Fingerprint profile (read + update without editing code). Only meaningful
+  // for freemodel-style providers, but stored globally.
   if (url === "/api/fingerprint") {
     if (creq.method === "GET") {
       sendJson(cres, 200, { ...FP, profileFile: FINGERPRINT_FILE });
@@ -1137,7 +1347,6 @@ const server = http.createServer((creq, cres) => {
         try {
           fs.mkdirSync(CONFIG_DIR, { recursive: true });
           fs.writeFileSync(FINGERPRINT_FILE, JSON.stringify(next, null, 2) + "\n");
-          // live-apply in-process
           Object.assign(FP, next);
           pushLog({ kind: "api", method: "PUT", path: "/api/fingerprint", status: 200, note: "profile updated" });
           sendJson(cres, 200, { ok: true, profile: { ...FP, profileFile: FINGERPRINT_FILE }, note: "applied live; restart to re-read file if edited externally" });
@@ -1147,26 +1356,18 @@ const server = http.createServer((creq, cres) => {
     }
   }
 
-  // Key pool management (UI + CLI keys.js + AI agents)
+  // Key pool management — operates on the active provider by default, or
+  // ?provider=<id> to target another. Alias keeps keys.js CLI and old UI working.
   if (url === "/api/keys") {
+    const p = providerForKeys();
+    const pool = poolOf(p.id);
     if (creq.method === "GET") {
-      reloadKeyStats();
+      reloadKeyStats(p.id);
       sendJson(cres, 200, {
-        total: KEY_POOL.length,
-        current: keyIdx,
-        keys: KEY_POOL.map((k, i) => {
-          const s = keyStats[k] || {};
-          return {
-            index: i,
-            masked: maskKey(k),
-            current: i === keyIdx,
-            ok: s.ok || 0,
-            limited: s.limited || 0,
-            bad: !!s.bad,
-            count: s.count || 0,
-            lastStatus: s.lastStatus,
-            lastUsed: s.lastUsed,
-          };
+        provider: p.id, total: pool.keys.length, current: pool.idx,
+        keys: pool.keys.map((k, i) => {
+          const s = (keyStats[p.id] || {})[k] || {};
+          return { index: i, masked: maskKey(k), current: i === pool.idx, ok: s.ok || 0, limited: s.limited || 0, bad: !!s.bad, count: s.count || 0, lastStatus: s.lastStatus, lastUsed: s.lastUsed };
         }),
       });
       return;
@@ -1175,13 +1376,10 @@ const server = http.createServer((creq, cres) => {
       readJsonBody(creq, (body, err) => {
         if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
         const added = [];
-        const add = (v) => {
-          if (typeof v === "string" && v.trim() && !KEY_POOL.includes(v.trim())) { KEY_POOL.push(v.trim()); ensureStats(v.trim()); added.push(v.trim()); }
-        };
-        if (Array.isArray(body.keys)) body.keys.forEach(add);
-        else if (body.key) add(body.key);
-        persistKeys();
-        sendJson(cres, 200, { ok: true, added: added.length, total: KEY_POOL.length });
+        const add = (v) => { if (typeof v === "string" && v.trim() && !pool.keys.includes(v.trim())) { pool.keys.push(v.trim()); ensureStats(p.id, v.trim()); added.push(v.trim()); } };
+        if (Array.isArray(body.keys)) body.keys.forEach(add); else if (body.key) add(body.key);
+        persistPool(p.id);
+        sendJson(cres, 200, { ok: true, provider: p.id, added: added.length, total: pool.keys.length });
       });
       return;
     }
@@ -1189,27 +1387,18 @@ const server = http.createServer((creq, cres) => {
       readJsonBody(creq, (body, err) => {
         if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
         let removed = false;
-        if (typeof body.index === "number" && KEY_POOL[body.index] !== undefined) {
-          KEY_POOL.splice(body.index, 1); removed = true;
-        } else if (typeof body.key === "string") {
-          const i = KEY_POOL.indexOf(body.key.trim());
-          if (i >= 0) { KEY_POOL.splice(i, 1); removed = true; }
-        }
-        if (removed) {
-          keyIdx = KEY_POOL.length ? keyIdx % KEY_POOL.length : 0;
-          persistKeys();
-          sendJson(cres, 200, { ok: true, removed: true, total: KEY_POOL.length });
-        } else {
-          sendJson(cres, 404, { ok: false, error: "key not found" });
-        }
+        if (typeof body.index === "number" && pool.keys[body.index] !== undefined) { pool.keys.splice(body.index, 1); removed = true; }
+        else if (typeof body.key === "string") { const i = pool.keys.indexOf(body.key.trim()); if (i >= 0) { pool.keys.splice(i, 1); removed = true; } }
+        if (removed) { pool.idx = pool.keys.length ? pool.idx % pool.keys.length : 0; persistPool(p.id); sendJson(cres, 200, { ok: true, provider: p.id, removed: true, total: pool.keys.length }); }
+        else sendJson(cres, 404, { ok: false, error: "key not found" });
       });
       return;
     }
     return;
   }
-  // Find the first working key (forward probe, stop on first 200, lock pointer).
   if (url === "/api/keys/find" && creq.method === "POST") {
-    readJsonBody(creq, async () => { const r = await findFirstWorking(); sendJson(cres, 200, r); });
+    const p = providerForKeys();
+    readJsonBody(creq, async () => { const r = await findFirstWorking(p.id); sendJson(cres, 200, Object.assign({ provider: p.id }, r)); });
     return;
   }
 
@@ -1222,35 +1411,30 @@ const server = http.createServer((creq, cres) => {
       const model = reqBody.model || "claude-opus-4-8";
       const prompt = reqBody.prompt || "Reply with exactly: ok";
       const proto = reqBody.proto === "anthropic" ? "anthropic" : "openai";
-      const isGpt = isGptModel(model);
+      const ap = activeProvider();
+      const route = routeRequest(ap, proto, model);
       // Route through the REAL endpoint (loopback) so the test exercises the
-      // exact path a client would use: chosen protocol × model family.
+      // exact path a client would use: chosen protocol × active provider.
       const path = proto === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
       const body = proto === "anthropic"
         ? { model, max_tokens: 64, stream: false, messages: [{ role: "user", content: [{ type: "text", text: prompt }] }] }
         : { model, max_tokens: 64, stream: false, messages: [{ role: "user", content: prompt }] };
       const buf = Buffer.from(JSON.stringify(body));
-      const logEntry = { kind: "test", method: "POST", path: path + "(" + proto + ")", status: null, note: model + (isGpt ? " [gpt]" : " [claude]") };
+      const logEntry = { kind: "test", method: "POST", path: path + "(" + proto + ")", status: null, note: model + " via " + ap.id };
       const up = http.request({ host: "127.0.0.1", port: CFG.port, method: "POST", path, headers: { "content-type": "application/json", "content-length": buf.length } }, (upres) => {
         const data = []; upres.on("data", (c) => data.push(c));
         upres.on("end", () => {
           const text = Buffer.concat(data).toString("utf8");
           const st = upres.statusCode || 502;
           logEntry.status = st; pushLog(logEntry);
-          if (st !== 200) { sendJson(cres, st, { ok: false, model, proto, path, status: st, raw: text }); return; }
-          // extract text from either response shape
+          if (st !== 200) { sendJson(cres, st, { ok: false, model, proto, path, provider: ap.id, upstream: route.host, status: st, raw: text }); return; }
           let out = text;
           try {
             const d = JSON.parse(text);
-            if (proto === "anthropic") {
-              const txt = (d.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
-              if (txt) out = txt;
-            } else {
-              const c = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
-              if (c) out = c;
-            }
+            if (proto === "anthropic") { const txt = (d.content || []).filter((b) => b.type === "text").map((b) => b.text).join(""); if (txt) out = txt; }
+            else { const c = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content; if (c) out = c; }
           } catch {}
-          sendJson(cres, 200, { ok: true, model, proto, path, upstream: isGpt ? CFG.upstreamOpenai : CFG.upstream, status: st, raw: out });
+          sendJson(cres, 200, { ok: true, model, proto, path, provider: ap.id, upstream: route.host, status: st, raw: out });
         });
       });
       up.on("error", (e) => { logEntry.status = 502; logEntry.note = e.message; pushLog(logEntry); sendJson(cres, 502, { ok: false, error: e.message }); });
@@ -1267,70 +1451,26 @@ const server = http.createServer((creq, cres) => {
       const raw = Buffer.concat(chunks).toString("utf8");
       let parsed;
       try { parsed = JSON.parse(raw); } catch { sendJson(cres, 400, { type: "error", error: { type: "invalid_request", message: "body is not valid JSON" } }); return; }
-      // GPT model via Anthropic protocol → translate to OpenAI, hit api.freemodel.dev
-      if (isGptModel(parsed.model)) {
+      const provider = activeProvider();
+      const model = parsed.model || "claude";
+      const route = routeRequest(provider, "anthropic", model);
+      let bodyBuf, clientStream;
+      if (route.translate) {
+        // Anthropic client -> OpenAI upstream: translate the body.
         const oai = anthropicToOpenAIRequest(parsed);
-        const clientStream = oai.stream === true;
-        const obuf = Buffer.from(JSON.stringify(oai));
-        const logEntry = { kind: "openai", method: "POST", path: "/v1/messages→gpt", status: null, note: parsed.model + (clientStream ? " stream" : " nonstream") };
-        // GPT-via-Anthropic: same per-request cursor rotation as the other paths.
-        // Stream: on rotatable status drain+retry; on 200 hand to openAIStreamToAnthropic.
-        // Non-stream: buffer, translate one-shot to an Anthropic Message, normalize errors.
-        const maxAttempts = Math.max(1, KEY_POOL.length);
-        let attempts = 0, cursor = keyIdx;
-        (function attempt() {
-          if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool"), "anthropic"); return; }
-          const key = KEY_POOL[cursor]; attempts++;
-          const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers: buildOpenAIUpstreamHeaders(obuf, key) }, (upres) => {
-            const st = upres.statusCode || 0;
-            const s = ensureStats(key); s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
-            if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
-              upres.resume();
-              if (st === 401 || st === 402 || st === 403) s.bad = true; else if (st === 429) s.limited++;
-              logEntry.note = maskKey(key) + "->" + st + "->retry"; cursor = nextUsable(cursor); attempt(); return;
-            }
-            if (st >= 200 && st < 300) { s.ok++; keyIdx = cursor; }
-            if (clientStream) {
-              openAIStreamToAnthropic(upres, cres, parsed.model, logEntry);
-              return;
-            }
-            const data = []; upres.on("data", (c) => data.push(c));
-            upres.on("end", () => {
-              const text = Buffer.concat(data).toString("utf8");
-              logEntry.status = st; pushLog(logEntry);
-              if (st !== 200) {
-                const norm = normalizeAnthropicError(text, st);
-                const b = Buffer.from(JSON.stringify(norm));
-                safeWriteHead(cres, st || 502, { "content-type": "application/json", "content-length": b.length });
-                safeEnd(cres, b);
-                return;
-              }
-              let oai; try { oai = JSON.parse(text); } catch {
-                const b = Buffer.from(JSON.stringify({ type: "error", error: { type: "proxy_error", message: "bad upstream json" } }));
-                safeWriteHead(cres, 502, { "content-type": "application/json", "content-length": b.length }); safeEnd(cres, b); return;
-              }
-              const ant = openAIResponseToAnthropic(oai);
-              const buf = Buffer.from(JSON.stringify(ant));
-              safeWriteHead(cres, 200, { "content-type": "application/json", "content-length": buf.length });
-              safeEnd(cres, buf);
-            });
-          });
-          up.on("error", (e) => { if (attempts < maxAttempts) { cursor = nextUsable(cursor); attempt(); } else proxyError(cres, logEntry, e, "anthropic"); });
-          up.setTimeout(120000, () => { try { up.destroy(); } catch {}
-            if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "timeout->retry"; attempt(); }
-            else proxyError(cres, logEntry, new Error("upstream timeout"), "anthropic");
-          });
-          up.write(obuf); up.end();
-        })();
-        return;
+        clientStream = oai.stream === true;
+        bodyBuf = Buffer.from(JSON.stringify(oai));
+      } else if (route.fingerprint) {
+        // Anthropic client -> freemodel cc host: inject the Claude Code fingerprint.
+        const inj = injectFingerprint(raw);
+        if (!inj.ok) { sendJson(cres, 400, { type: "error", error: { type: "invalid_request", message: "body is not valid JSON" } }); return; }
+        clientStream = inj.clientStream; bodyBuf = Buffer.from(inj.body);
+      } else {
+        // Anthropic client -> anthropic upstream, no fingerprint (not currently used).
+        clientStream = parsed.stream === true; bodyBuf = Buffer.from(raw);
       }
-      // Claude model → fingerprint + cc.freemodel.dev (existing path)
-      const inj = injectFingerprint(raw);
-      if (!inj.ok) { sendJson(cres, 400, { type: "error", error: { type: "invalid_request", message: "body is not valid JSON" } }); return; }
-      const buf = Buffer.from(inj.body);
-      const mode = inj.clientStream ? "anthropic-stream" : "anthropic-nonstream";
-      const logEntry = { kind: "anthropic", method: "POST", path: "/v1/messages", status: null, note: inj.clientStream ? "stream" : "nonstream" };
-      postWithRetry(buf, cres, mode, inj.model, logEntry);
+      const logEntry = { kind: route.upstreamProto === "openai" ? "openai" : "anthropic", method: "POST", path: "/v1/messages", status: null, note: model + " via " + provider.id + (clientStream ? " stream" : " nonstream") };
+      forwardWithRetry(provider, route, bodyBuf, "anthropic", clientStream, model, cres, logEntry);
     });
     return;
   }
@@ -1345,49 +1485,54 @@ const server = http.createServer((creq, cres) => {
         sendJson(cres, 400, { error: { message: "invalid JSON body: " + e.message, type: "invalid_request_error" } });
         return;
       }
-      // GPT model → forward OpenAI body as-is to api.freemodel.dev (no translation, no fingerprint)
-      if (isGptModel(oai.model)) {
-        const obuf = Buffer.from(JSON.stringify(oai));
-        const logEntry = { kind: "openai", method: "POST", path: "/v1/chat/completions→gpt", status: null, note: oai.model + (oai.stream === true ? " stream" : " nonstream") };
-        postOpenAIDirectWithRetry(obuf, cres, oai.model, logEntry);
-        return;
+      const provider = activeProvider();
+      const model = oai.model || "claude";
+      const route = routeRequest(provider, "openai", model);
+      let bodyBuf, clientStream = oai.stream === true;
+      if (route.translate) {
+        // OpenAI client -> Anthropic upstream (freemodel cc): translate + fingerprint.
+        const ant = oaiToAnthropic(oai);
+        if (route.fingerprint) {
+          const inj = injectFingerprint(JSON.stringify(ant));
+          if (!inj.ok) { sendJson(cres, 400, { error: { message: "failed to translate request", type: "invalid_request_error" } }); return; }
+          bodyBuf = Buffer.from(inj.body);
+        } else {
+          bodyBuf = Buffer.from(JSON.stringify(ant));
+        }
+      } else {
+        // OpenAI client -> OpenAI upstream: forward as-is (freemodel api host or openai-compat baseUrl).
+        bodyBuf = Buffer.from(JSON.stringify(oai));
       }
-      // Claude model → translate OpenAI→Anthropic, fingerprint, cc.freemodel.dev
-      const ant = oaiToAnthropic(oai);
-      const inj = injectFingerprint(JSON.stringify(ant));
-      if (!inj.ok) { sendJson(cres, 400, { error: { message: "failed to translate request", type: "invalid_request_error" } }); return; }
-      const buf = Buffer.from(inj.body);
-      const mode = oai.stream === true ? "openai-stream" : "openai-nonstream";
-      const logEntry = { kind: "openai", method: "POST", path: "/v1/chat/completions", status: null, note: oai.stream === true ? "stream" : "nonstream" };
-      postWithRetry(buf, cres, mode, oai.model || "claude", logEntry);
+      const logEntry = { kind: route.upstreamProto === "openai" ? "openai" : "anthropic", method: "POST", path: "/v1/chat/completions", status: null, note: model + " via " + provider.id + (clientStream ? " stream" : " nonstream") };
+      forwardWithRetry(provider, route, bodyBuf, "openai", clientStream, model, cres, logEntry);
     });
     return;
   }
 
-  // API: /v1/models — merged: Claude from cc.freemodel.dev + GPT from api.freemodel.dev
+  // API: /v1/models — models served by the ACTIVE provider (freemodel: merged
+  // claude+gpt from two hosts; openai-compat: one /models on baseUrl).
   if (url === "/v1/models" || url.startsWith("/v1/models")) {
     const logEntry = { kind: "api", method: "GET", path: "/v1/models", status: null };
-    function fetchModels(host) {
+    const ap = activeProvider();
+    function fetchModelsFrom(ep) {
       return new Promise((resolve) => {
-        const headers = { host, "user-agent": UA, "accept": "application/json" };
-        const k = currentKey();
-        if (k) headers["authorization"] = "Bearer " + k;
-        if (host === CFG.upstream) headers["x-api-key"] = k;
-        const up = https.request({ host, port: 443, method: "GET", path: "/v1/models", headers }, (upres) => {
+        const k = currentKey(ap.id);
+        const headers = ep.anthropic
+          ? buildAnthropicUpstreamHeaders(null, k, ep.host)
+          : buildOpenAIUpstreamHeaders(null, k, ep.host);
+        headers["accept"] = "application/json";
+        const up = https.request({ host: ep.host, port: ep.port, method: "GET", path: ep.path, headers }, (upres) => {
           const data = []; upres.on("data", (c) => data.push(c));
-          upres.on("end", () => {
-            try { resolve(JSON.parse(Buffer.concat(data).toString("utf8")).data || []); }
-            catch { resolve([]); }
-          });
+          upres.on("end", () => { try { resolve(JSON.parse(Buffer.concat(data).toString("utf8")).data || []); } catch { resolve([]); } });
         });
         up.on("error", () => resolve([]));
         up.setTimeout(10000, () => { try { up.destroy(); } catch {} resolve([]); });
         up.end();
       });
     }
-    Promise.all([fetchModels(CFG.upstream), fetchModels(CFG.upstreamOpenai)]).then(([claude, gpt]) => {
+    Promise.all(modelsEndpoints(ap).map(fetchModelsFrom)).then((lists) => {
       logEntry.status = 200; pushLog(logEntry);
-      const data = [].concat(claude, gpt);
+      const data = [].concat(...lists);
       const buf = Buffer.from(JSON.stringify({ object: "list", data }));
       safeWriteHead(cres, 200, { "content-type": "application/json", "content-length": buf.length });
       safeEnd(cres, buf);
@@ -1399,11 +1544,13 @@ const server = http.createServer((creq, cres) => {
 });
 
 server.listen(CFG.port, "127.0.0.1", () => {
+  const ap = activeProvider();
   console.log("freemodel-cc-proxy " + require("./package.json").version);
-  console.log("  Anthropic: http://127.0.0.1:" + CFG.port + "/v1/messages  (claude-* → cc, gpt-* → api)");
-  console.log("  OpenAI    : http://127.0.0.1:" + CFG.port + "/v1/chat/completions  (gpt-* → api direct, claude-* → cc)");
-  console.log("  Models    : http://127.0.0.1:" + CFG.port + "/v1/models  (merged Claude + GPT)");
+  console.log("  Anthropic: http://127.0.0.1:" + CFG.port + "/v1/messages");
+  console.log("  OpenAI    : http://127.0.0.1:" + CFG.port + "/v1/chat/completions");
+  console.log("  Models    : http://127.0.0.1:" + CFG.port + "/v1/models");
   console.log("  UI        : http://127.0.0.1:" + CFG.port + "/");
-  console.log("  upstreams : claude=https://" + CFG.upstream + "  openai=https://" + CFG.upstreamOpenai);
-  console.log("  keys      : " + KEY_POOL.length + " (active: " + maskKey(currentKey()) + ", rotate on 401/403/429)");
+  console.log("  active    : " + ap.id + " (" + ap.name + ", kind=" + ap.kind + ", keys=" + poolOf(ap.id).keys.length + ")");
+  console.log("  providers : " + PROVIDERS.providers.map((p) => p.id + "[" + p.kind + "," + poolOf(p.id).keys.length + "k]").join(" "));
+  console.log("  rotate on 401/403/429; 5xx returned (no pool burn)");
 });
