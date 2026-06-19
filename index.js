@@ -80,7 +80,11 @@ function loadKeyPool() {
 let KEY_POOL = loadKeyPool();
 let keyIdx = 0;
 const keyStats = {};
-const ROTATE_STATUSES = new Set([401, 402, 429, 500, 502, 503, 504]);
+// Rotate to another key only on auth/rate-limit errors. 5xx is an upstream
+// outage, not a key problem — rotating would burn the whole pool in one
+// request and mark every key "limited" for nothing. 5xx is returned to the
+// client as-is (normalized to the right error shape).
+const ROTATE_STATUSES = new Set([401, 402, 403, 429]);
 function ensureStats(k) { if (!keyStats[k]) keyStats[k] = { ok: 0, limited: 0, bad: false, count: 0, lastStatus: null, lastUsed: null }; return keyStats[k]; }
 KEY_POOL.forEach(ensureStats);
 function persistKeys() {
@@ -88,16 +92,21 @@ function persistKeys() {
 }
 function maskKey(k) { return k ? k.slice(0, 8) + "…" + k.slice(-4) : "(none)"; }
 function currentKey() { return KEY_POOL[keyIdx]; }
-// advance the persistent pointer to the next non-bad key (forward, circular)
-function advancePointer() {
-  if (KEY_POOL.length === 0) return;
-  for (let i = 0; i < KEY_POOL.length; i++) {
-    keyIdx = (keyIdx + 1) % KEY_POOL.length;
-    const s = keyStats[KEY_POOL[keyIdx]];
-    if (!s || !s.bad) return;
-  }
-}
 function reloadKeyStats() { KEY_POOL.forEach(ensureStats); }
+// Per-request cursor advance: returns the next non-bad key index after `from`,
+// WITHOUT mutating the shared keyIdx. Each request snapshots keyIdx, walks the
+// pool on a local cursor, and only commits keyIdx onto a key that returned 200.
+// That stops two concurrent requests from yanking the shared pointer out from
+// under each other (the race where both hit 401 and both advancePointer()).
+function nextUsable(from) {
+  if (KEY_POOL.length === 0) return from;
+  for (let i = 0; i < KEY_POOL.length; i++) {
+    const idx = (from + 1 + i) % KEY_POOL.length;
+    const s = keyStats[KEY_POOL[idx]];
+    if (!s || !s.bad) return idx;
+  }
+  return (from + 1) % KEY_POOL.length; // all bad — just step forward
+}
 
 // Sequential forward health probe: find the FIRST working key, lock the pointer
 // onto it, leave the rest untouched. Stops at the first 200 (minimal requests,
@@ -127,7 +136,11 @@ async function findFirstWorking() {
     const i = (start + step) % KEY_POOL.length;
     const key = KEY_POOL[i];
     const s = ensureStats(key);
+    // Skip keys we already know are dead or currently rate-limited — this is a
+    // manual "find me a working key now" action, not a full re-probe. Re-touching
+    // known-limited keys just wastes requests and IP budget.
     if (s.bad) { tried.push({ index: i, masked: maskKey(key), status: "skip(bad)" }); continue; }
+    if (s.limited) { tried.push({ index: i, masked: maskKey(key), status: "skip(limited×" + s.limited + ")" }); continue; }
     const res = await probeOnce(probeBody, key);
     s.lastStatus = res.status; s.lastUsed = new Date().toISOString(); s.count++;
     if (res.status === 200) { s.ok++; keyIdx = i; return { ok: true, current: i, masked: maskKey(key), probed: step + 1, tried }; }
@@ -462,17 +475,81 @@ function buildUpstreamHeaders(bodyBuf, key, extra) {
   return Object.assign(headers, extra || {});
 }
 
-function proxyError(cres, logEntry, e) {
+// ─── response safety + error normalization ───────────────────────────────
+// cres can throw if the client already disconnected; never let that crash the
+// process. Every client write goes through these.
+function safeWriteHead(cres, code, headers) { try { cres.writeHead(code, headers || {}); return true; } catch { return false; } }
+function safeEnd(cres, buf) { try { if (buf != null) cres.end(buf); else cres.end(); } catch {} }
+function safeWrite(cres, chunk) { try { cres.write(chunk); return true; } catch { return false; } }
+
+// Strip hop-by-hop headers from an upstream response before forwarding. Node
+// re-frames the body (chunked/content-length) for the client; copying the
+// upstream's transfer-encoding/connection/content-length verbatim can confuse
+// it (duplicate/contradictory framing).
+function filterHeaders(hdrs) {
+  const out = {};
+  for (const [k, v] of Object.entries(hdrs || {})) {
+    const lk = k.toLowerCase();
+    if (lk === "connection" || lk === "keep-alive" || lk === "transfer-encoding" ||
+        lk === "content-length" || lk === "host") continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+// Normalize an upstream error body into the shape each client SDK expects.
+// cc/api.freemodel.dev send `{"error":"Unauthorized - Invalid token"}` (a
+// STRING, not an object), which breaks both Anthropic and OpenAI SDK error
+// parsers. These always return the canonical shape for the wire protocol.
+function normalizeAnthropicError(upstreamText, status) {
+  let message = upstreamText, type = "api_error";
+  try {
+    const j = JSON.parse(upstreamText);
+    if (j && j.error) {
+      if (typeof j.error === "string") message = j.error;
+      else { message = j.error.message || JSON.stringify(j.error); type = j.error.type || type; }
+    } else if (typeof j === "string") message = j;
+  } catch {}
+  if (status === 401 || status === 403) type = "authentication_error";
+  else if (status === 429) type = "rate_limit_error";
+  else if (status >= 500) type = "api_error";
+  else if (status >= 400) type = "invalid_request_error";
+  return { type: "error", error: { type, message } };
+}
+function normalizeOpenAIError(upstreamText, status) {
+  let message = upstreamText, type = "upstream_error", code = status;
+  try {
+    const j = JSON.parse(upstreamText);
+    if (j && j.error) {
+      if (typeof j.error === "string") message = j.error;
+      else { message = j.error.message || JSON.stringify(j.error); type = j.error.type || type; code = j.error.code || status; }
+    } else if (typeof j === "string") message = j;
+  } catch {}
+  if (status === 401 || status === 403) type = "invalid_request_error";
+  else if (status === 429) type = "rate_limit_exceeded";
+  return { error: { message, type, code } };
+}
+
+function proxyError(cres, logEntry, e, shape) {
   logEntry.status = 502; logEntry.note = e.message; pushLog(logEntry);
-  try { cres.writeHead(502, { "content-type": "application/json" }); } catch {}
-  cres.end(JSON.stringify({ type: "error", error: { type: "proxy_error", message: e.message } }));
+  const body = shape === "openai"
+    ? normalizeOpenAIError(e.message, 502)
+    : normalizeAnthropicError(e.message, 502);
+  const buf = Buffer.from(JSON.stringify(body));
+  safeWriteHead(cres, 502, { "content-type": "application/json", "content-length": buf.length });
+  safeEnd(cres, buf);
 }
 
 // Pipe the upstream SSE straight through to an Anthropic streaming client.
+// Upstream SSE error events are piped verbatim — Anthropic SDK reads them.
+// Headers are filtered (hop-by-hop stripped) so Node re-frames cleanly, and all
+// writes are safe against a client that already hung up.
 function respondAnthropicStream(upres, cres, logEntry) {
   logEntry.status = upres.statusCode;
-  cres.writeHead(upres.statusCode || 502, upres.headers);
+  if (!safeWriteHead(cres, upres.statusCode || 502, filterHeaders(upres.headers))) { try { upres.destroy(); } catch {} return; }
   upres.pipe(cres);
+  upres.on("error", () => { try { cres.destroy(); upres.destroy(); } catch {} });
+  cres.on("error", () => { try { upres.destroy(); } catch {} });
   upres.on("end", () => pushLog(logEntry));
 }
 
@@ -484,8 +561,10 @@ function respondAnthropicNonStream(upres, cres, logEntry) {
     const text = Buffer.concat(data).toString("utf8");
     if (upres.statusCode !== 200) {
       logEntry.status = upres.statusCode; pushLog(logEntry);
-      cres.writeHead(upres.statusCode || 502, { "content-type": "application/json" });
-      cres.end(text);
+      const norm = normalizeAnthropicError(text, upres.statusCode);
+      const buf = Buffer.from(JSON.stringify(norm));
+      safeWriteHead(cres, upres.statusCode || 502, { "content-type": "application/json", "content-length": buf.length });
+      safeEnd(cres, buf);
       return;
     }
     const r = collectAnthropicMessage(text);
@@ -494,8 +573,8 @@ function respondAnthropicNonStream(upres, cres, logEntry) {
     const out = r.ok ? r.message : { type: "error", error: r.error || { type: "proxy_error", message: "failed to assemble non-stream response" } };
     const buf = Buffer.from(JSON.stringify(out));
     const code = r.ok ? 200 : 500;
-    cres.writeHead(code, { "content-type": "application/json", "content-length": buf.length });
-    cres.end(buf);
+    safeWriteHead(cres, code, { "content-type": "application/json", "content-length": buf.length });
+    safeEnd(cres, buf);
   });
 }
 
@@ -507,21 +586,20 @@ function respondOpenAIStream(upres, cres, model, logEntry) {
     upres.on("end", () => {
       logEntry.status = upres.statusCode; pushLog(logEntry);
       const text = Buffer.concat(data).toString("utf8");
-      let message = text;
-      try { const j = JSON.parse(text); message = (j.error && j.error.message) || text; } catch {}
-      const buf = Buffer.from(JSON.stringify({ error: { message, type: "upstream_error", code: upres.statusCode } }));
-      cres.writeHead(upres.statusCode || 502, { "content-type": "application/json", "content-length": buf.length });
-      cres.end(buf);
+      const norm = normalizeOpenAIError(text, upres.statusCode);
+      const buf = Buffer.from(JSON.stringify(norm));
+      safeWriteHead(cres, upres.statusCode || 502, { "content-type": "application/json", "content-length": buf.length });
+      safeEnd(cres, buf);
     });
     return;
   }
   logEntry.status = 200;
-  cres.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", "connection": "keep-alive" });
+  if (!safeWriteHead(cres, 200, { "content-type": "text/event-stream", "cache-control": "no-cache", "connection": "keep-alive" })) { try { upres.destroy(); } catch {} return; }
   const id = "chatcmpl-" + crypto.randomUUID().replace(/-/g, "").slice(0, 24);
   const created = Math.floor(Date.now() / 1000);
   const emit = (delta, finish) => {
     const obj = { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finish == null ? null : finish }] };
-    cres.write("data: " + JSON.stringify(obj) + "\n\n");
+    if (!safeWrite(cres, "data: " + JSON.stringify(obj) + "\n\n")) { try { upres.destroy(); } catch {} }
   };
   emit({ role: "assistant", content: "" }, null);
   const tcIndex = {};
@@ -568,8 +646,8 @@ function respondOpenAIStream(upres, cres, model, logEntry) {
   });
   upres.on("end", () => {
     emit({}, finish);
-    cres.write("data: [DONE]\n\n");
-    cres.end();
+    safeWrite(cres, "data: [DONE]\n\n");
+    safeEnd(cres);
     pushLog(logEntry);
   });
 }
@@ -582,11 +660,10 @@ function respondOpenAINonStream(upres, cres, model, logEntry) {
     const text = Buffer.concat(data).toString("utf8");
     if (upres.statusCode !== 200) {
       logEntry.status = upres.statusCode; pushLog(logEntry);
-      let message = text;
-      try { const j = JSON.parse(text); message = (j.error && j.error.message) || text; } catch {}
-      const buf = Buffer.from(JSON.stringify({ error: { message, type: "upstream_error", code: upres.statusCode } }));
-      cres.writeHead(upres.statusCode || 502, { "content-type": "application/json", "content-length": buf.length });
-      cres.end(buf);
+      const norm = normalizeOpenAIError(text, upres.statusCode);
+      const buf = Buffer.from(JSON.stringify(norm));
+      safeWriteHead(cres, upres.statusCode || 502, { "content-type": "application/json", "content-length": buf.length });
+      safeEnd(cres, buf);
       return;
     }
     const r = collectAnthropicMessage(text);
@@ -594,8 +671,8 @@ function respondOpenAINonStream(upres, cres, model, logEntry) {
     const out = r.ok ? anthropicMessageToOpenAI(r.message, model) : { error: { message: JSON.stringify(r.error), type: "proxy_error" } };
     const buf = Buffer.from(JSON.stringify(out));
     const code = r.ok ? 200 : 500;
-    cres.writeHead(code, { "content-type": "application/json", "content-length": buf.length });
-    cres.end(buf);
+    safeWriteHead(cres, code, { "content-type": "application/json", "content-length": buf.length });
+    safeEnd(cres, buf);
   });
 }
 
@@ -605,11 +682,14 @@ function passthroughGet(reqUrl, clientHeaders, cres) {
   const logEntry = { kind: "api", method: "GET", path: reqUrl, status: null };
   const up = https.request({ host: CFG.upstream, port: 443, method: "GET", path: reqUrl, headers }, (upres) => {
     logEntry.status = upres.statusCode;
-    cres.writeHead(upres.statusCode || 502, upres.headers);
+    if (!safeWriteHead(cres, upres.statusCode || 502, filterHeaders(upres.headers))) { try { upres.destroy(); } catch {} return; }
     upres.pipe(cres);
+    upres.on("error", () => { try { cres.destroy(); upres.destroy(); } catch {} });
+    cres.on("error", () => { try { upres.destroy(); } catch {} });
     upres.on("end", () => pushLog(logEntry));
   });
   up.on("error", (e) => proxyError(cres, logEntry, e));
+  up.setTimeout(30000, () => { try { up.destroy(); } catch {} proxyError(cres, logEntry, new Error("upstream timeout")); });
   up.end();
 }
 
@@ -620,8 +700,7 @@ function passthroughGet(reqUrl, clientHeaders, cres) {
 // gpt-* goes straight to the OpenAI host (no Anthropic translation, no
 // fingerprint); claude-* keeps the cc.freemodel.dev fingerprint path.
 function isGptModel(id) {
-  if (!id) return false;
-  return /^gpt-/i.test(id) || /gpt-5/i.test(id);
+  return !!id && /^gpt-/i.test(id);
 }
 
 function buildOpenAIUpstreamHeaders(bodyBuf, key) {
@@ -639,13 +718,15 @@ function buildOpenAIUpstreamHeaders(bodyBuf, key) {
 
 // Forward an OpenAI Chat Completions body as-is to api.freemodel.dev and pipe
 // the response straight back (the host already speaks OpenAI, stream + non-
-// stream). Key rotation on 401/402/429/5xx, same as the Claude path.
+// stream). Key rotation on 401/403/429 only; 5xx is returned to the client
+// (normalized) so an upstream outage doesn't burn the pool.
 function postOpenAIDirectWithRetry(bodyBuf, cres, model, logEntry) {
   const maxAttempts = Math.max(1, KEY_POOL.length);
   let attempts = 0;
+  let cursor = keyIdx; // per-request snapshot; only commit keyIdx on success
   function attempt() {
-    if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool")); return; }
-    const key = currentKey();
+    if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool"), "openai"); return; }
+    const key = KEY_POOL[cursor];
     attempts++;
     const headers = buildOpenAIUpstreamHeaders(bodyBuf, key);
     const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers }, (upres) => {
@@ -654,23 +735,42 @@ function postOpenAIDirectWithRetry(bodyBuf, cres, model, logEntry) {
       s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
       if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
         upres.resume();
-        if (st === 401) s.bad = true; else s.limited++;
+        if (st === 401 || st === 402 || st === 403) s.bad = true; else if (st === 429) s.limited++;
         const note = maskKey(key) + "->" + st;
-        advancePointer();
+        cursor = nextUsable(cursor);
         logEntry.note = logEntry.note ? logEntry.note + " " + note + "->retry" : note + "->retry";
         attempt();
         return;
       }
-      if (st >= 200 && st < 300) s.ok++;
       logEntry.status = st;
-      // pass upstream headers through but fix framing for the client
-      cres.writeHead(st || 502, upres.headers);
-      upres.pipe(cres);
-      upres.on("end", () => pushLog(logEntry));
+      if (st >= 200 && st < 300) {
+        s.ok++;
+        keyIdx = cursor; // commit shared pointer onto the working key
+        if (!safeWriteHead(cres, st, filterHeaders(upres.headers))) { try { upres.destroy(); } catch {} return; }
+        upres.pipe(cres);
+        upres.on("error", () => { try { cres.destroy(); upres.destroy(); } catch {} });
+        cres.on("error", () => { try { upres.destroy(); } catch {} });
+        upres.on("end", () => pushLog(logEntry));
+      } else {
+        // terminal error (rotation exhausted or non-rotatable 4xx/5xx): normalize
+        const errBuf = [];
+        upres.on("data", (c) => errBuf.push(c));
+        upres.on("end", () => {
+          pushLog(logEntry);
+          const norm = normalizeOpenAIError(Buffer.concat(errBuf).toString("utf8"), st);
+          const b = Buffer.from(JSON.stringify(norm));
+          safeWriteHead(cres, st || 502, { "content-type": "application/json", "content-length": b.length });
+          safeEnd(cres, b);
+        });
+      }
     });
     up.on("error", (e) => {
-      if (attempts < maxAttempts) { advancePointer(); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "neterr->retry"; attempt(); }
-      else proxyError(cres, logEntry, e);
+      if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "neterr->retry"; attempt(); }
+      else proxyError(cres, logEntry, e, "openai");
+    });
+    up.setTimeout(120000, () => { try { up.destroy(); } catch {}
+      if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "timeout->retry"; attempt(); }
+      else proxyError(cres, logEntry, new Error("upstream timeout"), "openai");
     });
     up.write(bodyBuf);
     up.end();
@@ -687,6 +787,10 @@ function anthropicToOpenAIRequest(ant) {
     messages: [],
     stream: ant.stream === true,
   };
+  // Ask the OpenAI host to include a final usage chunk in the stream so we can
+  // populate Anthropic `usage.output_tokens` for streaming GPT-via-Anthropic
+  // (otherwise usage is always 0 in stream mode).
+  if (out.stream) out.stream_options = { include_usage: true };
   if (ant.temperature != null) out.temperature = ant.temperature;
   if (ant.top_p != null) out.top_p = ant.top_p;
   if (Array.isArray(ant.stop_sequences)) out.stop = ant.stop_sequences;
@@ -699,7 +803,19 @@ function anthropicToOpenAIRequest(ant) {
   const conv = [];
   if (systemParts.length) conv.push({ role: "system", content: systemParts.join("\n\n") });
   for (const m of ant.messages || []) {
-    if (m.role === "user" || m.role === "assistant") {
+    if (m.role === "assistant" && Array.isArray(m.content) && m.content.some((b) => b.type === "tool_use")) {
+      // Assistant turn that called tools: OpenAI carries these as `tool_calls`
+      // on the assistant message (NOT as content parts). Without this the next
+      // `tool_result` references a tool_call the API never saw → 400.
+      const blocks = m.content;
+      const txt = blocks.filter((b) => b.type === "text").map((b) => b.text || "").join("");
+      const toolCalls = blocks.filter((b) => b.type === "tool_use").map((b) => ({
+        id: b.id, type: "function", function: { name: b.name, arguments: JSON.stringify(b.input || {}) },
+      }));
+      const msg = { role: "assistant", content: txt || null };
+      if (toolCalls.length) msg.tool_calls = toolCalls;
+      conv.push(msg);
+    } else if (m.role === "user" || m.role === "assistant") {
       conv.push({ role: m.role, content: anthropicContentToOpenAI(m.content) });
     } else if (m.role === "tool" || (Array.isArray(m.content) && m.content.some((b) => b.type === "tool_result"))) {
       const blocks = Array.isArray(m.content) ? m.content : [];
@@ -728,7 +844,11 @@ function anthropicContentToOpenAI(content) {
   const parts = [];
   for (const b of content) {
     if (b.type === "text") parts.push({ type: "text", text: b.text || "" });
-    else if (b.type === "tool_use") parts.push(null); // handled via assistant tool_calls below
+    else if (b.type === "tool_use") {
+      // Standalone tool_use outside an assistant turn (shouldn't normally
+      // happen) — drop it; assistant tool_use is handled in the message loop.
+      continue;
+    }
     else if (b.type === "image") {
       const src = b.source || {};
       if (src.type === "base64") parts.push({ type: "image_url", image_url: { url: `data:${src.media_type};base64,${src.data}` } });
@@ -766,26 +886,37 @@ function openAIResponseToAnthropic(oai) {
 // Translate OpenAI Chat Completions SSE → Anthropic Messages SSE, so an
 // Anthropic-protocol client streaming a GPT model gets native events.
 function openAIStreamToAnthropic(upres, cres, model, logEntry) {
-  const data = [];
+  const errBuf = [];
   if (upres.statusCode !== 200) {
-    upres.on("data", (c) => data.push(c));
+    upres.on("data", (c) => errBuf.push(c));
     upres.on("end", () => {
       logEntry.status = upres.statusCode; pushLog(logEntry);
-      const text = Buffer.concat(data).toString("utf8");
-      cres.writeHead(upres.statusCode || 502, { "content-type": "application/json" });
-      cres.end(text);
+      const norm = normalizeAnthropicError(Buffer.concat(errBuf).toString("utf8"), upres.statusCode);
+      const b = Buffer.from(JSON.stringify(norm));
+      safeWriteHead(cres, upres.statusCode || 502, { "content-type": "application/json", "content-length": b.length });
+      safeEnd(cres, b);
     });
     return;
   }
   logEntry.status = 200;
-  cres.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", "connection": "keep-alive" });
+  if (!safeWriteHead(cres, 200, { "content-type": "text/event-stream", "cache-control": "no-cache", "connection": "keep-alive" })) { try { upres.destroy(); } catch {} return; }
   const msgId = "msg_" + crypto.randomUUID();
-  const emit = (obj) => cres.write("event: " + obj.type + "\ndata: " + JSON.stringify(obj) + "\n\n");
+  let alive = true;
+  const emit = (obj) => { if (!alive) return; if (!safeWrite(cres, "event: " + obj.type + "\ndata: " + JSON.stringify(obj) + "\n\n")) { alive = false; try { upres.destroy(); } catch {} } };
   emit({ type: "message_start", message: { id: msgId, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } });
-  emit({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-  let buf = "";
+
+  let blockIdx = -1;        // current Anthropic content-block index
+  let textOpen = false;     // is there an open text block?
+  const tcMap = {};         // OpenAI tool_call.index -> { block: anthropicIdx }
+  let inputTokens = 0, outputTokens = 0;
   let finish = "end_turn";
+  let buf = "";
+
+  function openText() { if (textOpen) return; blockIdx++; emit({ type: "content_block_start", index: blockIdx, content_block: { type: "text", text: "" } }); textOpen = true; }
+  function closeText() { if (!textOpen) return; emit({ type: "content_block_stop", index: blockIdx }); textOpen = false; }
+
   upres.on("data", (chunk) => {
+    if (!alive) return;
     buf += chunk.toString("utf8");
     const lines = buf.split("\n");
     buf = lines.pop();
@@ -796,29 +927,68 @@ function openAIStreamToAnthropic(upres, cres, model, logEntry) {
       if (!payload || payload === "[DONE]") continue;
       let ev;
       try { ev = JSON.parse(payload); } catch { continue; }
-      const d = ev.choices && ev.choices[0] && ev.choices[0].delta;
-      if (d && typeof d.content === "string" && d.content) {
-        emit({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: d.content } });
+      const choice = ev.choices && ev.choices[0];
+      const d = choice && choice.delta;
+      if (d) {
+        if (typeof d.content === "string" && d.content) {
+          if (!textOpen) openText();
+          emit({ type: "content_block_delta", index: blockIdx, delta: { type: "text_delta", text: d.content } });
+        }
+        // tool_calls arrive as deltas: first chunk carries id+name, later
+        // chunks carry function.arguments fragments. Emit them as Anthropic
+        // tool_use blocks with input_json_delta so the client can assemble input.
+        if (Array.isArray(d.tool_calls)) {
+          for (const tc of d.tool_calls) {
+            const oi = tc.index || 0;
+            if (!tcMap[oi]) {
+              closeText();
+              blockIdx++;
+              tcMap[oi] = { block: blockIdx };
+              emit({ type: "content_block_start", index: blockIdx, content_block: { type: "tool_use", id: tc.id || ("tool_" + oi), name: (tc.function && tc.function.name) || "", input: {} } });
+            }
+            const fn = tc.function || {};
+            if (typeof fn.arguments === "string" && fn.arguments) {
+              emit({ type: "content_block_delta", index: tcMap[oi].block, delta: { type: "input_json_delta", partial_json: fn.arguments } });
+            }
+          }
+        }
       }
-      const fr = ev.choices && ev.choices[0] && ev.choices[0].finish_reason;
-      if (fr) finish = fr === "stop" ? "end_turn" : fr === "tool_calls" ? "tool_use" : fr === "length" ? "max_tokens" : "end_turn";
+      if (choice && choice.finish_reason) {
+        finish = choice.finish_reason === "stop" ? "end_turn" : choice.finish_reason === "tool_calls" ? "tool_use" : choice.finish_reason === "length" ? "max_tokens" : "end_turn";
+      }
+      if (ev.usage) {
+        inputTokens = ev.usage.prompt_tokens || inputTokens;
+        outputTokens = ev.usage.completion_tokens || outputTokens;
+      }
     }
   });
   upres.on("end", () => {
-    emit({ type: "content_block_stop", index: 0 });
-    emit({ type: "message_delta", delta: { stop_reason: finish, stop_sequence: null }, usage: { output_tokens: 0 } });
+    for (const oi of Object.keys(tcMap)) emit({ type: "content_block_stop", index: tcMap[oi].block });
+    if (textOpen) emit({ type: "content_block_stop", index: blockIdx });
+    if (blockIdx < 0) {
+      // nothing streamed at all — emit an empty text block so the client gets content
+      emit({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+      emit({ type: "content_block_stop", index: 0 });
+    }
+    emit({ type: "message_delta", delta: { stop_reason: finish, stop_sequence: null }, usage: { output_tokens: outputTokens } });
     emit({ type: "message_stop" });
-    cres.end();
+    safeEnd(cres);
     pushLog(logEntry);
   });
+  upres.on("error", () => { alive = false; try { cres.destroy(); } catch {} });
+  cres.on("error", () => { alive = false; try { upres.destroy(); } catch {} });
 }
 
 // POST to upstream /v1/messages?beta=true with key rotation. On a rotatable
-// status (401/402/429/5xx) it advances to the next key and retries the SAME
-// request — at most once per key in the pool — so the client sees no break.
+// status (401/403/429) it advances the LOCAL cursor to the next key and retries
+// the SAME request — at most once per key — so the client sees no break. 5xx
+// is not rotatable (upstream outage). keyIdx is committed only on 200, so
+// concurrent requests don't fight over the shared pointer.
 function postWithRetry(bodyBuf, cres, mode, model, logEntry) {
   const maxAttempts = Math.max(1, KEY_POOL.length);
   let attempts = 0;
+  let cursor = keyIdx; // per-request snapshot
+  const errShape = (mode === "openai-stream" || mode === "openai-nonstream") ? "openai" : "anthropic";
   function dispatch(upres) {
     if (mode === "anthropic-stream") respondAnthropicStream(upres, cres, logEntry);
     else if (mode === "anthropic-nonstream") respondAnthropicNonStream(upres, cres, logEntry);
@@ -826,8 +996,8 @@ function postWithRetry(bodyBuf, cres, mode, model, logEntry) {
     else respondOpenAINonStream(upres, cres, model, logEntry); // openai-nonstream
   }
   function attempt() {
-    if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool")); return; }
-    const key = currentKey();
+    if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool"), errShape); return; }
+    const key = KEY_POOL[cursor];
     attempts++;
     const headers = buildUpstreamHeaders(bodyBuf, key);
     const up = https.request({ host: CFG.upstream, port: 443, method: "POST", path: "/v1/messages?beta=true", headers }, (upres) => {
@@ -836,19 +1006,23 @@ function postWithRetry(bodyBuf, cres, mode, model, logEntry) {
       s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
       if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
         upres.resume(); // drain & discard the error body, free the socket
-        if (st === 401) s.bad = true; else s.limited++;
+        if (st === 401 || st === 402 || st === 403) s.bad = true; else if (st === 429) s.limited++;
         const note = maskKey(key) + "->" + st;
-        advancePointer();
+        cursor = nextUsable(cursor);
         logEntry.note = logEntry.note ? logEntry.note + " " + note + "->retry" : note + "->retry";
         attempt();
         return;
       }
-      if (st >= 200 && st < 300) s.ok++;
+      if (st >= 200 && st < 300) { s.ok++; keyIdx = cursor; }
       dispatch(upres);
     });
     up.on("error", (e) => {
-      if (attempts < maxAttempts) { advancePointer(); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "neterr->retry"; attempt(); }
-      else proxyError(cres, logEntry, e);
+      if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "neterr->retry"; attempt(); }
+      else proxyError(cres, logEntry, e, errShape);
+    });
+    up.setTimeout(180000, () => { try { up.destroy(); } catch {}
+      if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "timeout->retry"; attempt(); }
+      else proxyError(cres, logEntry, new Error("upstream timeout"), errShape);
     });
     up.write(bodyBuf);
     up.end();
@@ -859,16 +1033,18 @@ function postWithRetry(bodyBuf, cres, mode, model, logEntry) {
 // ─── UI helpers ───────────────────────────────────────────────────────────
 function sendJson(cres, code, obj) {
   const buf = Buffer.from(JSON.stringify(obj));
-  cres.writeHead(code, { "content-type": "application/json", "content-length": buf.length });
-  cres.end(buf);
+  safeWriteHead(cres, code, { "content-type": "application/json", "content-length": buf.length, "access-control-allow-origin": "*" });
+  safeEnd(cres, buf);
 }
 function readJsonBody(creq, cb) {
   const ch = [];
   creq.on("data", (c) => ch.push(c));
   creq.on("end", () => {
-    let b;
-    try { b = JSON.parse(Buffer.concat(ch).toString("utf8") || "{}"); } catch { b = {}; }
-    cb(b);
+    const text = Buffer.concat(ch).toString("utf8");
+    if (!text) return cb({}, null);
+    let b; let err = null;
+    try { b = JSON.parse(text); } catch (e) { err = e.message; b = {}; }
+    cb(b, err);
   });
 }
 
@@ -876,25 +1052,39 @@ function readJsonBody(creq, cb) {
 const server = http.createServer((creq, cres) => {
   const url = creq.url.split("?")[0];
 
+  // CORS: allow browser clients from any origin (UI is same-origin, but this
+  // keeps the LLM endpoints usable from web clients too). Preflight short-circuit.
+  try { cres.setHeader("access-control-allow-origin", "*"); } catch {}
+  if (creq.method === "OPTIONS") {
+    safeWriteHead(cres, 204, {
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "access-control-allow-headers": "content-type, authorization, x-api-key, anthropic-version, anthropic-beta",
+      "access-control-max-age": "86400",
+    });
+    safeEnd(cres);
+    return;
+  }
+
   // UI
   if (url === "/" || url === "/ui" || url === "/index.html") {
     try {
       const html = fs.readFileSync(UI_FILE, "utf8");
       const buf = Buffer.from(html);
-      cres.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": buf.length });
-      cres.end(buf);
+      safeWriteHead(cres, 200, { "content-type": "text/html; charset=utf-8", "content-length": buf.length });
+      safeEnd(cres, buf);
     } catch (e) { sendJson(cres, 500, { error: "ui.html missing: " + e.message }); }
     return;
   }
 
-  // Profile disabled → block LLM traffic (UI + /api/* still work so you can re-enable)
-  if (!PROFILE.enabled && url.startsWith("/v1/")) {
+  // Profile disabled → block LLM traffic, but NOT /v1/models (metadata) so the
+  // UI model list and test picker keep working while the profile is off.
+  if (!PROFILE.enabled && url.startsWith("/v1/") && url !== "/v1/models" && !url.startsWith("/v1/models")) {
     const buf = Buffer.from(JSON.stringify({
       type: "error", error: { type: "profile_disabled",
         message: "Profile '" + PROFILE.id + "' is disabled. Enable it in the proxy UI or PUT /api/profile { enabled: true }." }
     }));
-    cres.writeHead(503, { "content-type": "application/json", "content-length": buf.length, "x-profile-enabled": "false" });
-    cres.end(buf);
+    safeWriteHead(cres, 503, { "content-type": "application/json", "content-length": buf.length, "x-profile-enabled": "false" });
+    safeEnd(cres, buf);
     return;
   }
 
@@ -902,7 +1092,8 @@ const server = http.createServer((creq, cres) => {
   if (url === "/api/profile") {
     if (creq.method === "GET") { sendJson(cres, 200, { ...PROFILE, profileFile: PROFILE_FILE }); return; }
     if (creq.method === "PUT") {
-      readJsonBody(creq, (body) => {
+      readJsonBody(creq, (body, err) => {
+        if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
         if (typeof body.enabled === "boolean") PROFILE.enabled = body.enabled;
         if (typeof body.name === "string") PROFILE.name = body.name;
         if (typeof body.note === "string") PROFILE.note = body.note;
@@ -939,7 +1130,8 @@ const server = http.createServer((creq, cres) => {
       return;
     }
     if (creq.method === "PUT") {
-      readJsonBody(creq, (body) => {
+      readJsonBody(creq, (body, err) => {
+        if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
         const next = { ...FP };
         for (const k of Object.keys(FINGERPRINT_DEFAULTS)) if (body[k] != null && typeof body[k] === "string") next[k] = body[k];
         try {
@@ -980,7 +1172,8 @@ const server = http.createServer((creq, cres) => {
       return;
     }
     if (creq.method === "POST") {
-      readJsonBody(creq, (body) => {
+      readJsonBody(creq, (body, err) => {
+        if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
         const added = [];
         const add = (v) => {
           if (typeof v === "string" && v.trim() && !KEY_POOL.includes(v.trim())) { KEY_POOL.push(v.trim()); ensureStats(v.trim()); added.push(v.trim()); }
@@ -993,7 +1186,8 @@ const server = http.createServer((creq, cres) => {
       return;
     }
     if (creq.method === "DELETE") {
-      readJsonBody(creq, (body) => {
+      readJsonBody(creq, (body, err) => {
+        if (err) { sendJson(cres, 400, { ok: false, error: "invalid JSON body: " + err }); return; }
         let removed = false;
         if (typeof body.index === "number" && KEY_POOL[body.index] !== undefined) {
           KEY_POOL.splice(body.index, 1); removed = true;
@@ -1079,43 +1273,55 @@ const server = http.createServer((creq, cres) => {
         const clientStream = oai.stream === true;
         const obuf = Buffer.from(JSON.stringify(oai));
         const logEntry = { kind: "openai", method: "POST", path: "/v1/messages→gpt", status: null, note: parsed.model + (clientStream ? " stream" : " nonstream") };
-        if (clientStream) {
-          // stream OpenAI response → translate SSE to Anthropic events
-          const headers = buildOpenAIUpstreamHeaders(obuf, currentKey());
-          const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers }, (upres) => openAIStreamToAnthropic(upres, cres, parsed.model, logEntry));
-          up.on("error", (e) => proxyError(cres, logEntry, e));
-          up.write(obuf); up.end();
-        } else {
-          // non-stream: buffer OpenAI JSON, translate one-shot to Anthropic Message
-          const maxAttempts = Math.max(1, KEY_POOL.length);
-          let attempts = 0;
-          (function attempt() {
-            if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool")); return; }
-            const key = currentKey(); attempts++;
-            const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers: buildOpenAIUpstreamHeaders(obuf, key) }, (upres) => {
-              const st = upres.statusCode || 0;
-              const s = ensureStats(key); s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
-              if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
-                upres.resume(); if (st === 401) s.bad = true; else s.limited++;
-                logEntry.note = maskKey(key) + "->" + st + "->retry"; advancePointer(); attempt(); return;
+        // GPT-via-Anthropic: same per-request cursor rotation as the other paths.
+        // Stream: on rotatable status drain+retry; on 200 hand to openAIStreamToAnthropic.
+        // Non-stream: buffer, translate one-shot to an Anthropic Message, normalize errors.
+        const maxAttempts = Math.max(1, KEY_POOL.length);
+        let attempts = 0, cursor = keyIdx;
+        (function attempt() {
+          if (!KEY_POOL.length) { proxyError(cres, logEntry, new Error("no keys in pool"), "anthropic"); return; }
+          const key = KEY_POOL[cursor]; attempts++;
+          const up = https.request({ host: CFG.upstreamOpenai, port: 443, method: "POST", path: "/v1/chat/completions", headers: buildOpenAIUpstreamHeaders(obuf, key) }, (upres) => {
+            const st = upres.statusCode || 0;
+            const s = ensureStats(key); s.lastStatus = st; s.lastUsed = new Date().toISOString(); s.count++;
+            if (ROTATE_STATUSES.has(st) && attempts < maxAttempts) {
+              upres.resume();
+              if (st === 401 || st === 402 || st === 403) s.bad = true; else if (st === 429) s.limited++;
+              logEntry.note = maskKey(key) + "->" + st + "->retry"; cursor = nextUsable(cursor); attempt(); return;
+            }
+            if (st >= 200 && st < 300) { s.ok++; keyIdx = cursor; }
+            if (clientStream) {
+              openAIStreamToAnthropic(upres, cres, parsed.model, logEntry);
+              return;
+            }
+            const data = []; upres.on("data", (c) => data.push(c));
+            upres.on("end", () => {
+              const text = Buffer.concat(data).toString("utf8");
+              logEntry.status = st; pushLog(logEntry);
+              if (st !== 200) {
+                const norm = normalizeAnthropicError(text, st);
+                const b = Buffer.from(JSON.stringify(norm));
+                safeWriteHead(cres, st || 502, { "content-type": "application/json", "content-length": b.length });
+                safeEnd(cres, b);
+                return;
               }
-              if (st >= 200 && st < 300) s.ok++;
-              const data = []; upres.on("data", (c) => data.push(c));
-              upres.on("end", () => {
-                const text = Buffer.concat(data).toString("utf8");
-                logEntry.status = st; pushLog(logEntry);
-                if (st !== 200) { cres.writeHead(st || 502, { "content-type": "application/json" }); cres.end(text); return; }
-                let oai; try { oai = JSON.parse(text); } catch { cres.writeHead(502, { "content-type": "application/json" }); cres.end(JSON.stringify({ type: "error", error: { type: "proxy_error", message: "bad upstream json" } })); return; }
-                const ant = openAIResponseToAnthropic(oai);
-                const buf = Buffer.from(JSON.stringify(ant));
-                cres.writeHead(200, { "content-type": "application/json", "content-length": buf.length });
-                cres.end(buf);
-              });
+              let oai; try { oai = JSON.parse(text); } catch {
+                const b = Buffer.from(JSON.stringify({ type: "error", error: { type: "proxy_error", message: "bad upstream json" } }));
+                safeWriteHead(cres, 502, { "content-type": "application/json", "content-length": b.length }); safeEnd(cres, b); return;
+              }
+              const ant = openAIResponseToAnthropic(oai);
+              const buf = Buffer.from(JSON.stringify(ant));
+              safeWriteHead(cres, 200, { "content-type": "application/json", "content-length": buf.length });
+              safeEnd(cres, buf);
             });
-            up.on("error", (e) => { if (attempts < maxAttempts) { advancePointer(); attempt(); } else proxyError(cres, logEntry, e); });
-            up.write(obuf); up.end();
-          })();
-        }
+          });
+          up.on("error", (e) => { if (attempts < maxAttempts) { cursor = nextUsable(cursor); attempt(); } else proxyError(cres, logEntry, e, "anthropic"); });
+          up.setTimeout(120000, () => { try { up.destroy(); } catch {}
+            if (attempts < maxAttempts) { cursor = nextUsable(cursor); logEntry.note = (logEntry.note ? logEntry.note + " " : "") + "timeout->retry"; attempt(); }
+            else proxyError(cres, logEntry, new Error("upstream timeout"), "anthropic");
+          });
+          up.write(obuf); up.end();
+        })();
         return;
       }
       // Claude model → fingerprint + cc.freemodel.dev (existing path)
@@ -1183,8 +1389,8 @@ const server = http.createServer((creq, cres) => {
       logEntry.status = 200; pushLog(logEntry);
       const data = [].concat(claude, gpt);
       const buf = Buffer.from(JSON.stringify({ object: "list", data }));
-      cres.writeHead(200, { "content-type": "application/json", "content-length": buf.length });
-      cres.end(buf);
+      safeWriteHead(cres, 200, { "content-type": "application/json", "content-length": buf.length });
+      safeEnd(cres, buf);
     });
     return;
   }
@@ -1199,5 +1405,5 @@ server.listen(CFG.port, "127.0.0.1", () => {
   console.log("  Models    : http://127.0.0.1:" + CFG.port + "/v1/models  (merged Claude + GPT)");
   console.log("  UI        : http://127.0.0.1:" + CFG.port + "/");
   console.log("  upstreams : claude=https://" + CFG.upstream + "  openai=https://" + CFG.upstreamOpenai);
-  console.log("  keys      : " + KEY_POOL.length + " (active: " + maskKey(currentKey()) + ", rotate on 401/402/429/5xx)");
+  console.log("  keys      : " + KEY_POOL.length + " (active: " + maskKey(currentKey()) + ", rotate on 401/403/429)");
 });

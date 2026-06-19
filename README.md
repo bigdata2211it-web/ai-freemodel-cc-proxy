@@ -130,12 +130,15 @@ Precedence: env vars > `~/.freemodel-cc-proxy/config.json` > defaults.
 ## Key pool — multi-key rotation (drain #1 → #2 → …)
 
 The proxy holds a **pool of FreeModel keys** and drains them in order. It serves from
-the current key; when that key hits `401`/`402`/`429`/`5xx`, it **advances to the next
-key and retries the same request** — at most once per key — so the client sees no
-break. `401` marks a key `bad` (skipped until restart); `402`/`429`/`5xx` mark it
-`limited` and move the pointer forward (sequential drain). When every key is dead you
-finally get an error. A single legacy key (`FMCC_KEY` / config.json `key`) is used to
-bootstrap the pool the first time.
+the current key; when that key hits `401`/`403`/`429` (auth/rate-limit), it **advances to
+the next key and retries the same request** — at most once per key — so the client sees no
+break. `401`/`403` mark a key `bad` (skipped); `429` marks it `limited`. **`5xx` is NOT
+a key problem** (it's an upstream outage), so it is returned to the client as a normalized
+error instead of burning the whole pool. When every key is dead you finally get an error.
+Rotation uses a **per-request cursor**: each request snapshots the shared pointer, walks
+the pool locally, and only commits the pointer onto a key that returned `200` — so two
+concurrent requests can't yank the pointer out from under each other. A single legacy key
+(`FMCC_KEY` / config.json `key`) bootstraps the pool the first time.
 
 Manage keys live (updates the running proxy + persists `~/.freemodel-cc-proxy/keys.json`):
 
@@ -150,10 +153,11 @@ node keys.js status                # pool summary
 ```
 
 `find` does a sequential forward health probe (tiny `haiku` request, `max_tokens:1`),
-**stops at the first `200`**, marks dead keys (`401`→bad, `402/429`→limited) and locks
-the pointer onto the working one — leaving the rest untouched. Minimal requests, with a
-short pause between probes, so your IP doesn't look abusive. Use it after adding a batch
-of keys to immediately land on the first good one without your workload triggering rotation.
+**stops at the first `200`**, skips keys already known `bad` or `limited`, marks newly
+dead keys (`401`→bad, `429`→limited) and locks the pointer onto the working one — leaving
+the rest untouched. Minimal requests, with a short pause between probes, so your IP
+doesn't look abusive. Use it after adding a batch of keys to immediately land on the
+first good one without your workload triggering rotation.
 
 Or from the web UI (`/` → "Key pool" card: **Find first working** button), or via HTTP:
 

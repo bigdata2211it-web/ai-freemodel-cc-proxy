@@ -758,8 +758,10 @@ node keys.js status            <span class="c"># сводка</span></pre>
   }
   function renderModelSelect(){
     const sel = $("#model"); const prev = sel.value; sel.innerHTML = "";
-    const want = proto === "anthropic" ? "claude" : "gpt";
-    const list = ALL_MODELS.filter((id) => want === "claude" ? isClaude(id) : isGpt(id));
+    // Show the full matrix: any model under any protocol. The backend already
+    // translates claude⇄gpt across protocols, so OpenAI+claude-* and
+    // Anthropic+gpt-* are valid and worth testing.
+    const list = ALL_MODELS.slice();
     list.forEach((id) => { const o = document.createElement("option"); o.value = id; o.textContent = id; sel.append(o); });
     if (prev && list.includes(prev)) sel.value = prev;
     $("#modelHint").textContent = list.length ? "(" + list.length + ")" : "(нет моделей)";
